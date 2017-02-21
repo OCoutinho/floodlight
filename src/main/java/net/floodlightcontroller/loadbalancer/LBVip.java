@@ -70,6 +70,21 @@ public class LBVip {
     }
     
     public String pickPool(IPClient client) {
+    	 
+//    	IpProtocol clientProtocol = client.nw_proto;
+//    	
+//    	byte TCPprotocol = (byte) IpProtocol.TCP.getIpProtocolNumber();
+//   
+//        byte UDPprotocol = (byte) IpProtocol.UDP.getIpProtocolNumber();
+//   
+//        byte ICMPprotocol = (byte) IpProtocol.ICMP.getIpProtocolNumber();
+//        
+//        System.out.print(pools.get(0).getProtocol());
+        
+    	
+    	
+    	
+    	
         // for now, return the first pool; consider different pool choice policy later
         if (pools.size() > 0)
             return pools.get(0);

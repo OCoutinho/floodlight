@@ -70,6 +70,28 @@ public class MonitorsResource extends ServerResource {
             return lbs.createMonitor(monitor);
     }
     
+    @Put
+    @Post
+    public Collection<LBMonitor> associateMonitor(String postData) {
+
+        LBMonitor monitor=null;
+        try {
+            monitor=jsonToMonitor(postData);
+        } catch (IOException e) {
+            log.error("Could not parse JSON {}", e.getMessage());
+        }
+        
+        ILoadBalancerService lbs =
+                (ILoadBalancerService)getContext().getAttributes().
+                    get(ILoadBalancerService.class.getCanonicalName());
+        
+       /* String monitorId = (String) getRequestAttributes().get("monitor");
+        if (monitorId != null)*/
+        return lbs.associateMonitorWithPool(monitor);
+        
+    }
+    
+    
     @Delete
     public int removeMonitor() {
         
@@ -81,7 +103,27 @@ public class MonitorsResource extends ServerResource {
 
         return lbs.removeMonitor(monitorId);
     }
+    
+    @Delete
+    public int dissociateMonitor(String postData) {
+    	
+    	LBMonitor monitor=null;
+        try {
+            monitor=jsonToMonitor(postData);
+        } catch (IOException e) {
+            log.error("Could not parse JSON {}", e.getMessage());
+        }
+                
+        ILoadBalancerService lbs =
+                (ILoadBalancerService)getContext().getAttributes().
+                    get(ILoadBalancerService.class.getCanonicalName());
 
+        /*String monitorId = (String) getRequestAttributes().get("monitor");
+        
+        if (monitorId != null)*/
+        return lbs.dissociateMonitorWithPool(monitor);
+    }
+    
     protected LBMonitor jsonToMonitor(String json) throws IOException {
         MappingJsonFactory f = new MappingJsonFactory();
         JsonParser jp;
@@ -141,6 +183,10 @@ public class MonitorsResource extends ServerResource {
                     }
                     if (field.equals("address")) {
                         monitor.address = Integer.parseInt(jp.getText());
+                        continue;
+                    }
+                    if (field.equals("poolId")) {
+                        monitor.poolId = jp.getText();
                         continue;
                     }
                     if (field.equals("protocol")) {

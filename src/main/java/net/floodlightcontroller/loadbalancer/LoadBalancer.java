@@ -112,6 +112,7 @@ public class LoadBalancer implements IFloodlightModule,
     protected HashMap<String, LBVip> vips;
     protected HashMap<String, LBPool> pools;
     protected HashMap<String, LBMember> members;
+    protected HashMap<String, LBMonitor> monitors;
     protected HashMap<Integer, String> vipIpToId;
     protected HashMap<Integer, MacAddress> vipIpToMac;
     protected HashMap<Integer, String> memberIpToId;
@@ -687,7 +688,7 @@ public class LoadBalancer implements IFloodlightModule,
             pool = pools.get(poolId);
             if (pool == null)	// fix dereference violations
             	return -1;
-            if (pool.vipId != null)
+            if (pool.vipId != null && vips.containsKey(pool.vipId))
                 vips.get(pool.vipId).pools.remove(poolId);
             pools.remove(poolId);
             return 0;
@@ -750,8 +751,8 @@ public class LoadBalancer implements IFloodlightModule,
         member = members.get(memberId);
         
         if(member != null){
-            if (member.poolId != null)
-                pools.get(member.poolId).members.remove(memberId);
+            if (member.poolId != null && pools.containsKey(member.poolId))
+                pools.get(member.poolId).members.remove(memberId); // check pools.get(member.poolId) ==null
             members.remove(memberId);
             return 0;
         } else {
@@ -761,27 +762,79 @@ public class LoadBalancer implements IFloodlightModule,
 
     @Override
     public Collection<LBMonitor> listMonitors() {
-        return null;
+    	return monitors.values();
     }
 
     @Override
     public Collection<LBMonitor> listMonitor(String monitorId) {
-        return null;
+    	Collection<LBMonitor> result = new HashSet<LBMonitor>();
+        result.add(monitors.get(monitorId));
+        return result;
     }
 
     @Override
     public LBMonitor createMonitor(LBMonitor monitor) {
-        return null;
+    	 if (monitor == null)
+             monitor = new LBMonitor();
+
+         monitors.put(monitor.id, monitor);
+         
+         return monitor;
     }
 
     @Override
     public LBMonitor updateMonitor(LBMonitor monitor) {
-        return null;
+    	monitors.put(monitor.id, monitor);
+        return monitor;
     }
+    
+    @Override
+    public Collection<LBMonitor> associateMonitorWithPool(LBMonitor monitor) {
+    	Collection<LBMonitor> result = new HashSet<LBMonitor>();
+    	LBPool pool = null;
+    	
+    	if(monitor !=null)
+    		pool = pools.get(monitor.poolId);
+    	
+    		if(pool !=null){
+    			pool.monitors.add(monitor.id);
+    	
+    			for(String stringID: pool.monitors){
+    				result.add(monitors.get(stringID));
+    			}
+    		}
+    	
+        return result;
+    }
+    
+    @Override
+    public int dissociateMonitorWithPool(LBMonitor monitor) {
+    	LBPool pool;
+    	
+    	pool = pools.get(monitor.poolId);
+    	    	
+    	if(pool !=null && monitor !=null){
+    		pool.monitors.remove(monitor.id);
+        	return 0;
+    	}else{
+    		return -1;
+    	}
+    }
+    
 
     @Override
     public int removeMonitor(String monitorId) {
-        return 0;
+    	LBMonitor monitor;
+        monitor = monitors.get(monitorId);
+        
+        if(monitor != null){
+            if(monitor.poolId != null && pools.containsKey(monitor.poolId))
+            	pools.get(monitor.poolId).monitors.remove(monitorId);
+            monitors.remove(monitorId);
+            return 0;
+        } else {
+            return -1;
+        }    
     }
 
     @Override
@@ -835,6 +888,7 @@ public class LoadBalancer implements IFloodlightModule,
         vips = new HashMap<String, LBVip>();
         pools = new HashMap<String, LBPool>();
         members = new HashMap<String, LBMember>();
+        monitors = new HashMap<String,LBMonitor>();
         vipIpToId = new HashMap<Integer, String>();
         vipIpToMac = new HashMap<Integer, MacAddress>();
         memberIpToId = new HashMap<Integer, String>();

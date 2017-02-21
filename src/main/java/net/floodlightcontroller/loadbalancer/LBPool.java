@@ -32,7 +32,7 @@ import net.floodlightcontroller.loadbalancer.LoadBalancer.IPClient;
 
 @JsonSerialize(using=LBPoolSerializer.class)
 public class LBPool {
-    protected String id;
+	protected String id;
     protected String name;
     protected String tenantId;
     protected String netId;
@@ -70,5 +70,4 @@ public class LBPool {
             return null;
         }
     }
-
 }
