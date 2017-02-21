@@ -147,6 +147,23 @@ public interface ILoadBalancerService extends IFloodlightService {
      * @return LBMonitor: Updated monitor 
      */
     public LBMonitor updateMonitor(LBMonitor monitor);
+    
+    /**
+     * Associate an existing monitor to a pool
+     * @param String poolId: the pool id in which the monitor will be added
+     * @return Collecton<LBMonitor>: all monitors currently associated to the pool
+     */
+    
+    public Collection<LBMonitor> associateMonitorWithPool(LBMonitor monitor);
+    
+    /**
+     * Dissociate a monitor from a pool
+     * @param LBPool pool: The pool in which the monitor will be dissociated
+     * @param LBMonitor monitor: The monitor which will be dissociated from the pool
+     * @return
+     */
+    
+    public int dissociateMonitorWithPool(LBMonitor monitor);
 
     /**
      * Remove an existing monitor.
