@@ -29,7 +29,7 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 public class LBMonitor {
     protected String id;
     protected String name;
-    protected short type;
+    protected byte type;
     protected short delay;
     protected short timeout;
     protected short attemptsBeforeDeactivation;
@@ -46,7 +46,7 @@ public class LBMonitor {
     protected short status;
 
     public LBMonitor() {
-        id = null;
+        id = String.valueOf((int) (Math.random()*10000));
         name = null;
         type = 0;
         delay = 0;
@@ -60,6 +60,11 @@ public class LBMonitor {
         adminState = 0;
         status = 0;
         
+    }
+    
+    public void setPool(String poolId){
+    	this.poolId= poolId;
+    	
     }
     
 }
