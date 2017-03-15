@@ -632,7 +632,7 @@ ILoadBalancerService, IOFMessageListener {
 			}
 		};
 
-		scheduler.scheduleAtFixedRate(healthCheck, 15, 15,TimeUnit.SECONDS);
+		scheduler.scheduleAtFixedRate(healthCheck, 10, 10,TimeUnit.SECONDS);
 	}
 
 	public void vipProxyMembersHealthCheck(String destMac, IPv4Address destAddr, byte msgType,String vipId){
