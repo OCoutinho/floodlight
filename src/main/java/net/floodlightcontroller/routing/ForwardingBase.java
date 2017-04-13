@@ -327,7 +327,6 @@ public abstract class ForwardingBase implements IOFMessageListener {
         List<OFAction> actions = new ArrayList<OFAction>();
         actions.add(sw.getOFFactory().actions().output(outport, Integer.MAX_VALUE));
         pob.setActions(actions);
-
         /* Use packet in buffer if there is a buffer ID set */
         if (useBufferedPacket) {
             pob.setBufferId(pi.getBufferId()); /* will be NO_BUFFER if there isn't one */

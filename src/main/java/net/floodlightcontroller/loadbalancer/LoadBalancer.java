@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.projectfloodlight.openflow.protocol.OFFlowMod;
 import org.projectfloodlight.openflow.protocol.match.Match;
@@ -48,10 +49,13 @@ import org.projectfloodlight.openflow.types.U64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.util.concurrent.CycleDetectingLockFactory.Policy;
+
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFMessageListener;
 import net.floodlightcontroller.core.IOFSwitch;
+import net.floodlightcontroller.core.IListener.Command;
 import net.floodlightcontroller.core.internal.IOFSwitchService;
 import net.floodlightcontroller.core.module.FloodlightModuleContext;
 import net.floodlightcontroller.core.module.FloodlightModuleException;
@@ -101,7 +105,7 @@ ILoadBalancerService, IOFMessageListener {
 
 	protected static Logger log = LoggerFactory.getLogger(LoadBalancer.class);
 
-	public static String OFPT_ACTION = "ACTION";
+	public static String OFPR_ACTION = "ACTION";
 
 
 	// Our dependencies
@@ -120,15 +124,18 @@ ILoadBalancerService, IOFMessageListener {
 	protected HashMap<String, LBVip> vips;
 	protected HashMap<String, LBPool> pools;
 	protected HashMap<String, LBMember> members;
+	protected HashMap<String, L7Policy> l7policies;
+	protected HashMap<String, L7Rule> l7rules;
 	protected HashMap<Integer, String> vipIpToId;
 	protected HashMap<Integer, MacAddress> vipIpToMac;
 	protected HashMap<Integer, String> memberIpToId;
 	protected HashMap<IPClient, LBMember> clientToMember;
 	protected HashMap<IDevice, String> deviceToMemberId;
 
+
 	//Copied from Forwarding with message damper routine for pushing proxy Arp 
 	protected static String LB_ETHER_TYPE = "0x800";
-	protected static int LB_PRIORITY = 32768;
+	protected static int LB_PRIORITY = 32767;
 
 	// Comparator for sorting by SwitchCluster
 	public Comparator<SwitchPort> clusterIdComparator =
@@ -215,79 +222,90 @@ ILoadBalancerService, IOFMessageListener {
 				int destIpAddress = ip_pkt.getDestinationAddress().getInt();
 
 				// HTTP CHECKER AND PARSER 
-				if(pi.getReason().name().equals(OFPT_ACTION)){
+				if(pi.getReason().name().equals(OFPR_ACTION)){
+					//log.info("IN ACTION");
 					if (ip_pkt.getPayload() instanceof TCP) {
 						TCP tcppkt = (TCP) ip_pkt.getPayload();
 						if(tcppkt.getDestinationPort().equals(TransportPort.of(80))){
 							Data dte = (Data) tcppkt.getPayload();
 							if(dte.getData().length > 0){
 								if(members != null){
-									// Se o destino e um membro que esteja na pool HTTP !!! MUDAR MAIS TARDE
 									String[] dest_url = null;
+									IPv4Address membroBaitIP = null;
+									IPv4Address clientIp = null;
 									for(LBMember member:  members.values()){
 										if(IPv4Address.of(destIpAddress).equals(IPv4Address.of(member.address))){
 											dest_url = parseHTTP(dte.getData());
+											membroBaitIP = IPv4Address.of(member.address);
+											clientIp = ip_pkt.getSourceAddress();
+
 										}
 									}
 
-									// Only if HTTP request was for VIP that we should pick another member. 
+									// Only if HTTP request was for VIP that we should pick a member. 
 									if(vipIpToId.containsKey(IPv4.toIPv4Address(dest_url[0]))){
-										log.info("LALALALA UHH");
-										
-										// PARSE URL, IF URL CONTAINS .html , .js , .css to another pool
-										// IF URL CONTAINS .jpg , .png , .xls, .txt , .php, .asp to another pool
-										
-//										IPClient client = new IPClient();
-//										client.ipAddress = ip_pkt.getSourceAddress();
-//										client.nw_proto = ip_pkt.getProtocol();
-//										client.srcPort = tcppkt.getSourcePort();
-//										client.targetPort = tcppkt.getDestinationPort();
-//
-//										LBVip vip = vips.get(vipIpToId.get(destIpAddress));
-//										if (vip == null)			// fix dereference violations           
-//											return Command.CONTINUE;
-//										LBPool pool = pools.get(vip.pickPool(client));
-//										if (pool == null)			// fix dereference violations
-//											return Command.CONTINUE;
-//										LBMember member = members.get(pool.pickMember(client));
-//										if(member == null)			//fix dereference violations
-//											return Command.CONTINUE;
-//										
-//										// for chosen member, check device manager and find and push routes, in both directions                    
-//										pushBidirectionalVipRoutes(sw, pi, cntx, client, member);
+										String url = dest_url[1];
 
-										// packet out based on table rule
-//										pushPacket(pkt, sw, pi.getBufferId(), (pi.getVersion().compareTo(OFVersion.OF_12) < 0) ? pi.getInPort() : pi.getMatch().get(MatchField.IN_PORT), OFPort.TABLE,
-//												cntx, true);
-//
-//										return Command.STOP;
+										// TODO
+
+										IPClient membro_bait = new IPClient();
+										membro_bait.ipAddress = membroBaitIP;
+										membro_bait.nw_proto = ip_pkt.getProtocol();
+										membro_bait.srcPort = tcppkt.getSourcePort();
+										membro_bait.targetPort = tcppkt.getDestinationPort();
+										log.info("BAIT IP: {}", membro_bait.ipAddress);
+										log.info("SOURCE OF REQST : {}", clientIp);
+
+										for(L7Policy l7_policy: l7policies.values()){
+											for(L7Rule l7_rule: l7rules.values()){
+												if(Objects.equals(l7_rule.policyId, l7_policy.id)){
+													if(l7_rule.type == 1){
+														String file_extension = l7_rule.value;
+														if(url.endsWith(file_extension)){
+
+															if(l7_policy.action == 1){
+																// Redirect to Pool
+
+																//sfpService.deleteEntriesForSwitch(sw.getId());
+
+																// Switch statistics collection to pick a member
+																HashMap<String, U64> memberPortBandwidth = collectSwitchStatistics();
+																LBMember new_member = members.get(pools.get(l7_policy.poolId).pickMember(membro_bait,memberPortBandwidth));
+																if(new_member == null)			//fix dereference violations
+																	return Command.CONTINUE;
+
+																// for chosen member, check device manager and find and push routes, in both directions  
+																redirectToMember(sw,pi,cntx,membro_bait,new_member,clientIp);
+																//pushBidirectionalVipRoutes(sw, pi, cntx, membro_bait, new_member);
+
+																// packet out based on table rule
+																pushPacket(pkt, sw, pi.getBufferId(), (pi.getVersion().compareTo(OFVersion.OF_12) < 0) ? pi.getInPort() : pi.getMatch().get(MatchField.IN_PORT), OFPort.TABLE,
+																		cntx, true);
+
+																log.info("WIRESHARK BOYS");
+																return Command.STOP;
+															}
+															if(l7_policy.action == 2){
+																// Reject request
+																return Command.STOP;
+															}
+
+														}
+													} else {
+														// - do nothing - 
+														log.info("NO FILETYPE?!");
+													}
+												}
+											}
+										}
 									}
 								}
+							} else{
+								return Command.STOP;
 							}
 						}
 					}
 				}
-
-				//				int srcIpAddress = ip_pkt.getSourceAddress().getInt();
-				//
-				//				if (vipIpToId.containsKey(srcIpAddress)){
-				//
-				//					OFPacketInReason reason1 = pi.getReason();
-				//					log.info("REASON SOURCE=VIP: {}",reason1.name().toString());
-				//					if (ip_pkt.getPayload() instanceof TCP) {
-				//						TCP tcp_pkt = (TCP) ip_pkt.getPayload();
-				//						log.info("PACKET FROM VIP {}", tcp_pkt );
-				//						Data dte = (Data) tcp_pkt.getPayload();
-				//
-				//						StringBuilder sb = new StringBuilder();
-				//						for (byte b : dte.getData()) {
-				//							sb.append(String.format("%02X ", b));
-				//						}
-				//						log.info("YEAAH {}", sb);
-				//					}
-				//
-				//				}
-
 				if (vipIpToId.containsKey(destIpAddress)){
 
 					// Switch statistics collection to pick a member
@@ -298,10 +316,6 @@ ILoadBalancerService, IOFMessageListener {
 					client.nw_proto = ip_pkt.getProtocol();
 					if (ip_pkt.getPayload() instanceof TCP) {
 						TCP tcp_pkt = (TCP) ip_pkt.getPayload();
-						log.info("PACKET TO VIP {}", tcp_pkt );
-						Data dte = (Data) tcp_pkt.getPayload();
-						log.info("DAFUQ ! {}", dte.getData());
-
 						client.srcPort = tcp_pkt.getSourcePort();
 						client.targetPort = tcp_pkt.getDestinationPort();
 					}
@@ -325,18 +339,12 @@ ILoadBalancerService, IOFMessageListener {
 					if(member == null)			//fix dereference violations
 						return Command.CONTINUE;
 
-
-					if(client.targetPort.equals(TransportPort.of(80))){
-						log.info("PERANTE UM HTTP");
-
-					}
 					// for chosen member, check device manager and find and push routes, in both directions                    
 					pushBidirectionalVipRoutes(sw, pi, cntx, client, member);
 
 					// packet out based on table rule
 					pushPacket(pkt, sw, pi.getBufferId(), (pi.getVersion().compareTo(OFVersion.OF_12) < 0) ? pi.getInPort() : pi.getMatch().get(MatchField.IN_PORT), OFPort.TABLE,
 							cntx, true);
-
 
 					return Command.STOP;
 				}
@@ -366,14 +374,13 @@ ILoadBalancerService, IOFMessageListener {
 				}
 			}
 		}
-
 		// collect statistics of the switch ports attached to the members
 		if(deviceToMemberId !=null){
 			for(IDevice membersDevice: deviceToMemberId.keySet()){
 				String memberId = deviceToMemberId.get(membersDevice);
 				for(SwitchPort dstDap: membersDevice.getAttachmentPoints()){
 					SwitchPortBandwidth bandwidthOfPort = statisticsService.getBandwidthConsumption(dstDap.getNodeId(), dstDap.getPortId());
-					if(bandwidthOfPort != null) // needs time for 1st collection, this avoids nullPointerException 
+					if(bandwidthOfPort != null) // needs time for 1st collection 
 						portBandwidth.put(memberId, bandwidthOfPort.getBitsPerSecondRx());
 				}
 			}
@@ -479,7 +486,6 @@ ILoadBalancerService, IOFMessageListener {
 
 		counterPacketOut.increment();
 		sw.write(pob.build());
-
 	}
 
 	/**
@@ -628,30 +634,6 @@ ILoadBalancerService, IOFMessageListener {
 	 * @param long pinSwitch
 	 */
 	public void pushStaticVipRoute(boolean inBound, Path route, IPClient client, LBMember member, IOFSwitch pinSwitch,OFPacketIn pi, FloodlightContext cntx) {
-		//		Match.Builder mb1 = pinSwitch.getOFFactory().buildMatch();
-		//
-		//		mb1.setExact(MatchField.ETH_TYPE, EthType.IPv4)
-		//		.setExact(MatchField.IP_PROTO, client.nw_proto)
-		//		.setExact(MatchField.IPV4_SRC, client.ipAddress);
-		//		if (client.nw_proto.equals(IpProtocol.TCP)) {
-		//			mb1.setExact(MatchField.TCP_SRC, client.srcPort);
-		//		} else if (client.nw_proto.equals(IpProtocol.UDP)) {
-		//			mb1.setExact(MatchField.UDP_SRC, client.srcPort);
-		//		} else if (client.nw_proto.equals(IpProtocol.SCTP)) {
-		//			mb1.setExact(MatchField.SCTP_SRC, client.srcPort);
-		//		} else if (client.nw_proto.equals(IpProtocol.ICMP)) {
-		//			/* no-op */
-		//		} else {
-		//			log.error("Unknown IpProtocol {} detected during inbound static VIP route push.", client.nw_proto);
-		//		}
-		//
-		//		U64 cookie = U64.ZERO;
-		//		boolean b = pushRoute(route, mb1.build(), pi, pinSwitch.getId(), cookie, 
-		//				cntx, false,
-		//				OFFlowModCommand.ADD);
-		//		log.info("pushed? : {}", b);
-
-
 		List<NodePortTuple> path = route.getPath();
 		if (path.size() > 0) {
 			for (int i = 0; i < path.size(); i+=2) {
@@ -662,8 +644,8 @@ ILoadBalancerService, IOFMessageListener {
 
 				OFFlowMod.Builder fmb = pinSwitch.getOFFactory().buildFlowAdd();
 
-				fmb.setIdleTimeout(5);//FlowModUtils.INFINITE_TIMEOUT);
-				fmb.setHardTimeout(0);//FlowModUtils.INFINITE_TIMEOUT);
+				fmb.setIdleTimeout(FlowModUtils.INFINITE_TIMEOUT);
+				fmb.setHardTimeout(FlowModUtils.INFINITE_TIMEOUT);
 				fmb.setBufferId(OFBufferId.NO_BUFFER);
 				fmb.setOutPort(OFPort.ANY);
 				fmb.setCookie(U64.of(0));  
@@ -718,7 +700,6 @@ ILoadBalancerService, IOFMessageListener {
 					mb.setExact(MatchField.ETH_TYPE, EthType.IPv4)
 					.setExact(MatchField.IP_PROTO, client.nw_proto)
 					.setExact(MatchField.IPV4_DST, client.ipAddress)
-					//.setExact(MatchField.IPV4_SRC, IPv4Address.of(vips.get(member.vipId).address)) //!!
 					.setExact(MatchField.IN_PORT, path.get(i).getPortId());
 					if (client.nw_proto.equals(IpProtocol.TCP)) {
 						mb.setExact(MatchField.TCP_DST, client.srcPort);
@@ -740,7 +721,6 @@ ILoadBalancerService, IOFMessageListener {
 						} else { // OXM introduced in OF1.2
 							actions.add(pinSwitch.getOFFactory().actions().setField(pinSwitch.getOFFactory().oxms().ethSrc(vips.get(member.vipId).proxyMac)));
 							actions.add(pinSwitch.getOFFactory().actions().setField(pinSwitch.getOFFactory().oxms().ipv4Src(IPv4Address.of(vips.get(member.vipId).address))));
-							//actions.add(pinSwitch.getOFFactory().actions().output(OFPort.CONTROLLER, Integer.MAX_VALUE));
 							actions.add(pinSwitch.getOFFactory().actions().output(path.get(i+1).getPortId(), Integer.MAX_VALUE));
 
 						}
@@ -763,149 +743,223 @@ ILoadBalancerService, IOFMessageListener {
 				//pinSwitch.write(fmb.build());
 				//messageDamper.write(pinSwitch, fmb.build());
 				sfpService.addFlow(entryName, fmb.build(), sw);
+
 			}
 		}
 
 		return;
 	}
 
-	//
-	//	private boolean pushRoute(Path route, Match  match, OFPacketIn pi, DatapathId pinSwitch, U64 cookie, FloodlightContext cntx,
-	//			boolean requestFlowRemovedNotification, OFFlowModCommand add) {
-	//
-	//
-	//		boolean packetOutSent = false;
-	//
-	//		List<NodePortTuple> switchPortList = route.getPath();
-	//
-	//		for (int indx = switchPortList.size() - 1; indx > 0; indx -= 2) {
-	//			// indx and indx-1 will always have the same switch DPID.
-	//			DatapathId switchDPID = switchPortList.get(indx).getNodeId();
-	//			IOFSwitch sw = switchService.getSwitch(switchDPID);
-	//
-	//			if (sw == null) {
-	//				if (log.isWarnEnabled()) {
-	//					log.warn("Unable to push route, switch at DPID {} " + "not available", switchDPID);
-	//				}
-	//				return packetOutSent;
-	//			}
-	//			OFFlowMod.Builder fmb;
-	//			fmb = sw.getOFFactory().buildFlowAdd();
-	//
-	//			OFActionOutput.Builder aob = sw.getOFFactory().actions().buildOutput();
-	//			List<OFAction> actions = new ArrayList<OFAction>();	
-	//			Match.Builder mb = MatchUtils.convertToVersion(match, sw.getOFFactory().getVersion());
-	//
-	//			// set input and output ports on the switch
-	//			OFPort outPort = switchPortList.get(indx).getPortId();
-	//			OFPort inPort = switchPortList.get(indx - 1).getPortId();
-	//			if (FLOWMOD_DEFAULT_MATCH_IN_PORT) {
-	//				mb.setExact(MatchField.IN_PORT, inPort);
-	//			}
-	//			aob.setPort(outPort);
-	//			aob.setMaxLen(Integer.MAX_VALUE);
-	//			actions.add(aob.build());
-	//
-	//			if (FLOWMOD_DEFAULT_SET_SEND_FLOW_REM_FLAG || requestFlowRemovedNotification) {
-	//				Set<OFFlowModFlags> flags = new HashSet<>();
-	//				flags.add(OFFlowModFlags.SEND_FLOW_REM);
-	//				fmb.setFlags(flags);
-	//			}
-	//
-	//			fmb.setMatch(mb.build())
-	//			.setIdleTimeout(FLOWMOD_DEFAULT_IDLE_TIMEOUT)
-	//			.setHardTimeout(FLOWMOD_DEFAULT_HARD_TIMEOUT)
-	//			.setBufferId(OFBufferId.NO_BUFFER)
-	//			.setCookie(cookie)
-	//			.setOutPort(outPort)
-	//			.setPriority(FLOWMOD_DEFAULT_PRIORITY);
-	//
-	//			FlowModUtils.setActions(fmb, actions, sw);
-	//
-	//			/* Configure for particular switch pipeline */
-	//			if (sw.getOFFactory().getVersion().compareTo(OFVersion.OF_10) != 0) {
-	//				fmb.setTableId(FLOWMOD_DEFAULT_TABLE_ID);
-	//			}
-	//
-	//			if (log.isTraceEnabled()) {
-	//				log.trace("Pushing Route flowmod routeIndx={} " +
-	//						"sw={} inPort={} outPort={}",
-	//						new Object[] {indx,
-	//								sw,
-	//								fmb.getMatch().get(MatchField.IN_PORT),
-	//								outPort });
-	//			}
-	//
-	//			if (OFDPAUtils.isOFDPASwitch(sw)) {
-	//				OFDPAUtils.addLearningSwitchFlow(sw, cookie, 
-	//						FLOWMOD_DEFAULT_PRIORITY, 
-	//						FLOWMOD_DEFAULT_HARD_TIMEOUT,
-	//						FLOWMOD_DEFAULT_IDLE_TIMEOUT,
-	//						fmb.getMatch(), 
-	//						null, 
-	//						outPort);
-	//			} else {
-	//				messageDamper.write(sw, fmb.build());
-	//			}
-	//
-	//			/* Push the packet out the first hop switch */
-	//			if (sw.getId().equals(pinSwitch) &&
-	//					!fmb.getCommand().equals(OFFlowModCommand.DELETE) &&
-	//					!fmb.getCommand().equals(OFFlowModCommand.DELETE_STRICT)) {
-	//				/* Use the buffered packet at the switch, if there's one stored */
-	//				pushPacket(sw, pi, outPort, true, cntx);
-	//				packetOutSent = true;
-	//			}
-	//		}
-	//
-	//		return packetOutSent;
-	//	}
-	//
-	//	private void pushPacket(IOFSwitch sw, OFPacketIn pi, OFPort outPort, boolean useBufferedPacket, FloodlightContext cntx) {
-	//		if (pi == null) {
-	//            return;
-	//        }
-	//
-	//        // The assumption here is (sw) is the switch that generated the
-	//        // packet-in. If the input port is the same as output port, then
-	//        // the packet-out should be ignored.
-	//        if ((pi.getVersion().compareTo(OFVersion.OF_12) < 0 ? pi.getInPort() : pi.getMatch().get(MatchField.IN_PORT)).equals(outPort)) {
-	//            if (log.isDebugEnabled()) {
-	//                log.debug("Attempting to do packet-out to the same " +
-	//                        "interface as packet-in. Dropping packet. " +
-	//                        " SrcSwitch={}, pi={}",
-	//                        new Object[]{sw, pi});
-	//                return;
-	//            }
-	//        }
-	//
-	//        if (log.isTraceEnabled()) {
-	//            log.trace("PacketOut srcSwitch={} pi={}",
-	//                    new Object[] {sw, pi});
-	//        }
-	//
-	//        OFPacketOut.Builder pob = sw.getOFFactory().buildPacketOut();
-	//        List<OFAction> actions = new ArrayList<OFAction>();
-	//        actions.add(sw.getOFFactory().actions().output(outPort, Integer.MAX_VALUE));
-	//        pob.setActions(actions);
-	//
-	//        /* Use packet in buffer if there is a buffer ID set */
-	//        if (useBufferedPacket) {
-	//            pob.setBufferId(pi.getBufferId()); /* will be NO_BUFFER if there isn't one */
-	//        } else {
-	//            pob.setBufferId(OFBufferId.NO_BUFFER);
-	//        }
-	//
-	//        if (pob.getBufferId().equals(OFBufferId.NO_BUFFER)) {
-	//            byte[] packetData = pi.getData();
-	//            pob.setData(packetData);
-	//        }
-	//
-	//        pob.setInPort((pi.getVersion().compareTo(OFVersion.OF_12) < 0 ? pi.getInPort() : pi.getMatch().get(MatchField.IN_PORT)));
-	//
-	//        messageDamper.write(sw, pob.build());
-	//		
-	//	}
+	public void redirectToMember(IOFSwitch sw, OFPacketIn pi, FloodlightContext cntx, IPClient bait, LBMember new_member,IPv4Address clientIp){
+		// borrowed code from Forwarding to retrieve src and dst device entities
+		// Check if we have the location of the destination
+		IDevice srcDevice = null;
+		IDevice dstDevice = null;
+		IDevice baitDevice = null;
+		String clientMAC = null;
+		String baitMAC = null;
+		
+
+		// retrieve all known devices
+		Collection<? extends IDevice> allDevices = deviceManagerService.getAllDevices();
+
+		for (IDevice d : allDevices) {
+			for (int j = 0; j < d.getIPv4Addresses().length; j++) {
+				if (srcDevice == null && clientIp.equals(d.getIPv4Addresses()[j])){
+					srcDevice = d;
+					clientMAC = srcDevice.getMACAddressString();
+				}
+				if (dstDevice == null && new_member.address == d.getIPv4Addresses()[j].getInt()) {
+					dstDevice = d;
+					new_member.macString = dstDevice.getMACAddressString();
+				}
+				if(baitDevice == null && bait.ipAddress.equals(d.getIPv4Addresses()[j])){
+					baitDevice = d;
+					baitMAC = baitDevice.getMACAddressString();
+				}
+				if (srcDevice != null && dstDevice != null && baitDevice !=null)
+					break;
+			}
+		}
+		OFPort bait_port = null;
+		OFPort new_port = null;
+		if(deviceToMemberId !=null){
+			for(IDevice membersDevice: deviceToMemberId.keySet()){
+				String memberId = deviceToMemberId.get(membersDevice);
+				for(SwitchPort dstDap: membersDevice.getAttachmentPoints()){
+					if(memberId.equals(deviceToMemberId.get(baitDevice))){
+						log.info("OK PORT BAIT?: {}", dstDap.getPortId());
+						bait_port = dstDap.getPortId();
+					}
+					if(memberId.equals(deviceToMemberId.get(dstDevice))){
+						log.info("OK PORT DST?: {}", dstDap.getPortId());
+						new_port = dstDap.getPortId();
+					}
+				}
+			}
+		}
+		log.info("clientMAC ={},clientIp={}, baitMAC={}, baitIp={}, newMembIp={},newMembMAC={},baitPort={},newPort={} ", new Object[] {clientMAC, clientIp, baitMAC, bait.ipAddress,new_member.address,new_member.macString,bait_port,new_port } );
+		
+		String entryName;
+		Match.Builder mb = sw.getOFFactory().buildMatch();
+		ArrayList<OFAction> actions = new ArrayList<OFAction>();
+
+		OFFlowMod.Builder fmb = sw.getOFFactory().buildFlowAdd();
+
+		fmb.setIdleTimeout(FlowModUtils.INFINITE_TIMEOUT);
+		fmb.setHardTimeout(FlowModUtils.INFINITE_TIMEOUT);
+		fmb.setBufferId(OFBufferId.NO_BUFFER);
+		fmb.setOutPort(OFPort.ANY);
+		fmb.setCookie(U64.of(0));  
+		fmb.setPriority(FlowModUtils.PRIORITY_MAX);
+		
+		
+		entryName = "REDIRECT TO :" + IPv4Address.of(new_member.address);
+		
+		mb.setExact(MatchField.ETH_TYPE, EthType.IPv4)
+		.setExact(MatchField.IP_PROTO, bait.nw_proto)
+		.setExact(MatchField.ETH_SRC, MacAddress.of(baitMAC))
+		.setExact(MatchField.IPV4_SRC, bait.ipAddress)
+		.setExact(MatchField.IN_PORT, bait_port)
+		.setExact(MatchField.ETH_DST, MacAddress.of(clientMAC))
+		.setExact(MatchField.IPV4_DST,clientIp);
+		if (bait.nw_proto.equals(IpProtocol.TCP)) {
+			mb.setExact(MatchField.TCP_SRC, bait.srcPort);
+		} else if (bait.nw_proto.equals(IpProtocol.UDP)) {
+			mb.setExact(MatchField.UDP_SRC, bait.srcPort);
+		} else if (bait.nw_proto.equals(IpProtocol.SCTP)) {
+			mb.setExact(MatchField.SCTP_SRC, bait.srcPort);
+		} else if (bait.nw_proto.equals(IpProtocol.ICMP)) {
+			/* no-op */
+		} else {
+			log.error("Unknown IpProtocol {} detected during inbound static VIP route push.", bait.nw_proto);
+		}
+		
+		
+		if (sw.getOFFactory().getVersion().compareTo(OFVersion.OF_12) < 0) { 
+			actions.add(sw.getOFFactory().actions().setDlDst(MacAddress.of(new_member.macString)));
+			actions.add(sw.getOFFactory().actions().setNwSrc(IPv4Address.of(new_member.address)));
+			actions.add(sw.getOFFactory().actions().output(new_port, Integer.MAX_VALUE));
+		} else { // OXM introduced in OF1.2
+			actions.add(sw.getOFFactory().actions().setField(sw.getOFFactory().oxms().ethDst(MacAddress.of(new_member.macString))));
+			actions.add(sw.getOFFactory().actions().setField(sw.getOFFactory().oxms().ipv4Dst(IPv4Address.of(new_member.address))));
+			actions.add(sw.getOFFactory().actions().output(new_port, Integer.MAX_VALUE));
+
+		}
+		
+		fmb.setActions(actions);
+		fmb.setPriority(U16.t(LB_PRIORITY));
+		fmb.setMatch(mb.build());
+		//pinSwitch.write(fmb.build());
+		//messageDamper.write(pinSwitch, fmb.build());
+		sfpService.addFlow(entryName, fmb.build(), sw.getId());
+
+		
+		// srcDevice and/or dstDevice is null, no route can be pushed
+		if (srcDevice == null || dstDevice == null) return;
+
+		DatapathId srcIsland = topologyService.getClusterId(sw.getId());
+
+		if (srcIsland == null) {
+			log.debug("No openflow island found for source {}/{}", 
+					sw.getId().toString(), pi.getInPort());
+			return;
+		}
+
+		// Validate that we have a destination known on the same island
+		// Validate that the source and destination are not on the same switchport
+		boolean on_same_island = false;
+		boolean on_same_if = false;
+		//Switch
+		for (SwitchPort dstDap : dstDevice.getAttachmentPoints()) {
+			DatapathId dstSwDpid = dstDap.getNodeId();
+			DatapathId dstIsland = topologyService.getClusterId(dstSwDpid);
+			if ((dstIsland != null) && dstIsland.equals(srcIsland)) {
+				on_same_island = true;
+				if ((sw.getId().equals(dstSwDpid)) && OFMessageUtils.getInPort(pi).equals(dstDap.getPortId())) {
+					on_same_if = true;
+				}
+				break;
+			}
+		}
+
+		if (!on_same_island) {
+			// Flood since we don't know the dst device
+			if (log.isTraceEnabled()) {
+				log.trace("No first hop island found for destination " + 
+						"device {}, Action = flooding", dstDevice);
+			}
+			return;
+		}            
+
+		if (on_same_if) {
+			if (log.isTraceEnabled()) {
+				log.trace("Both source and destination are on the same " + 
+						"switch/port {}/{}, Action = NOP", 
+						sw.toString(), pi.getInPort());
+			}
+			return;
+		}	
+
+		// Install all the routes where both src and dst have attachment
+		// points.  Since the lists are stored in sorted order we can 
+		// traverse the attachment points in O(m+n) time
+		SwitchPort[] srcDaps = srcDevice.getAttachmentPoints();
+		Arrays.sort(srcDaps, clusterIdComparator);
+		SwitchPort[] dstDaps = dstDevice.getAttachmentPoints();
+		Arrays.sort(dstDaps, clusterIdComparator);
+
+		int iSrcDaps = 0, iDstDaps = 0;
+
+		// following Forwarding's same routing routine, retrieve both in-bound and out-bound routes for
+		// all clusters.
+		while ((iSrcDaps < srcDaps.length) && (iDstDaps < dstDaps.length)) {
+			SwitchPort srcDap = srcDaps[iSrcDaps];
+			SwitchPort dstDap = dstDaps[iDstDaps];
+			DatapathId srcCluster = 
+					topologyService.getClusterId(srcDap.getNodeId());
+			DatapathId dstCluster = 
+					topologyService.getClusterId(dstDap.getNodeId());
+
+			int srcVsDest = srcCluster.compareTo(dstCluster);
+			if (srcVsDest == 0) {
+				if (!srcDap.equals(dstDap) && 
+						(srcCluster != null) && 
+						(dstCluster != null)) {
+					Path routeIn = 
+							routingEngineService.getPath(srcDap.getNodeId(),
+									srcDap.getPortId(),
+									dstDap.getNodeId(),
+									dstDap.getPortId());
+					Path routeOut = 
+							routingEngineService.getPath(dstDap.getNodeId(),
+									dstDap.getPortId(),
+									srcDap.getNodeId(),
+									srcDap.getPortId());
+
+					// use static flow entry pusher to push flow mod along in and out path
+					// in: match src client (ip, port), rewrite dest from vip ip/port to member ip/port, forward
+					// out: match dest client (ip, port), rewrite src from member ip/port to vip ip/port, forward
+
+					if (! routeIn.getPath().isEmpty()) {
+						pushStaticVipRoute(true, routeIn, bait, new_member, sw, pi, cntx);
+					}
+
+					if (! routeOut.getPath().isEmpty()) {
+						pushStaticVipRoute(false, routeOut, bait, new_member, sw, pi, cntx);
+					}
+
+				}
+				iSrcDaps++;
+				iDstDaps++;
+			} else if (srcVsDest < 0) {
+				iSrcDaps++;
+			} else {
+				iDstDaps++;
+			}
+		}
+		return;
+	}
 
 	public String[] parseHTTP(byte[] data){
 		// TODO THIS IS REQUEST ,WHAT IF A RESPONSE COMES ?!
@@ -913,8 +967,8 @@ ILoadBalancerService, IOFMessageListener {
 		String destination;
 		String http = new String(data);
 
-		String [] http_fields= http.split("\n");
-		path = http_fields[0].substring(http_fields[0].indexOf(" ")+1,http_fields[0].lastIndexOf(" ", http_fields[0].length()));
+		String [] http_fields = http.split("\n");
+		path = http_fields[0].substring(http_fields[0].indexOf(" ")+1,http_fields[0].lastIndexOf(" ", http_fields[0].length()-1));
 
 		destination = http_fields[3].substring(http_fields[3].indexOf(" ")+1,http_fields[3].length()-1);
 		String [] dest_path = {destination, path};
@@ -1078,65 +1132,100 @@ ILoadBalancerService, IOFMessageListener {
 			return -1;
 		}    
 	}
-	
+
 	@Override
 	public L7Rule createL7Rule(L7Rule l7_rule) {
-		// TODO Auto-generated method stub
+		if (l7_rule == null)
+			l7_rule = new L7Rule();
+
+		// Only create l7rule if l7policy exists
+		if (l7_rule.policyId != null && l7policies.get(l7_rule.policyId) != null) {
+			l7rules.put(l7_rule.id, l7_rule);
+			return l7_rule;
+		}
 		return null;
 	}
 
 	@Override
 	public L7Rule updateL7Rule(L7Rule l7_rule) {
-		// TODO Auto-generated method stub
-		return null;
+		l7rules.put(l7_rule.id, l7_rule);
+		return l7_rule;
 	}
-	
+
 	@Override
 	public Collection<L7Rule> listL7Rules() {
-		// TODO Auto-generated method stub
-		return null;
+		return l7rules.values();
 	}
 
 	@Override
 	public Collection<L7Rule> listL7Rule(String ruleId) {
-		// TODO Auto-generated method stub
-		return null;
+		Collection<L7Rule> result = new HashSet<L7Rule>();
+		result.add(l7rules.get(ruleId));
+		return result;
 	}
 
 	@Override
 	public int removeL7Rule(String ruleId) {
-		// TODO Auto-generated method stub
-		return 0;
+		L7Rule l7_rule;
+		l7_rule = l7rules.get(ruleId);
+
+		if(l7_rule != null){
+			l7rules.remove(ruleId);
+			return 0;
+		} else {
+			return -1;
+		}    
 	}
 
 	@Override
 	public L7Policy createL7Policy(L7Policy l7_policy) {
-		// TODO Auto-generated method stub
+		if (l7_policy == null)
+			l7_policy = new L7Policy();
+
+		if(l7_policy.vipId != null && l7_policy.poolId != null){
+			if(pools.get(l7_policy.poolId) != null && vips.get(l7_policy.vipId) != null){ 
+				l7policies.put(l7_policy.id, l7_policy);
+				return l7_policy;
+			}
+		}
 		return null;
+
 	}
 
 	@Override
 	public L7Policy updateL7Policy(L7Policy l7_policy) {
-		// TODO Auto-generated method stub
-		return null;
+		l7policies.put(l7_policy.id, l7_policy);
+		return l7_policy;
 	}
 
 	@Override
 	public Collection<L7Policy> listL7Policies() {
-		// TODO Auto-generated method stub
-		return null;
+		return l7policies.values();
 	}
 
 	@Override
 	public Collection<L7Policy> listL7Policy(String policyId) {
-		// TODO Auto-generated method stub
-		return null;
+		Collection<L7Policy>  result = new HashSet<L7Policy>();
+		result.add(l7policies.get(policyId));
+		return result;
 	}
 
+	// Also removes L7Rules of L7Policy with policyId
 	@Override
 	public int removeL7Policy(String policyId) {
-		// TODO Auto-generated method stub
-		return 0;
+		L7Policy l7_policy;
+		l7_policy = l7policies.get(policyId);
+
+		if(l7_policy != null){
+			l7policies.remove(policyId);
+			for(L7Rule l7_rule : l7rules.values()){
+				if(Objects.equals(l7_rule.policyId,policyId))
+					l7rules.remove(l7_rule);
+			}
+			return 0;
+		} else {
+			return -1;
+		}    
 	}
 
 	@Override
@@ -1217,6 +1306,8 @@ ILoadBalancerService, IOFMessageListener {
 		vips = new HashMap<String, LBVip>();
 		pools = new HashMap<String, LBPool>();
 		members = new HashMap<String, LBMember>();
+		l7rules = new HashMap<String, L7Rule>();
+		l7policies = new HashMap<String, L7Policy>();
 		vipIpToId = new HashMap<Integer, String>();
 		vipIpToMac = new HashMap<Integer, MacAddress>();
 		memberIpToId = new HashMap<Integer, String>();

@@ -2,6 +2,7 @@ package net.floodlightcontroller.loadbalancer;
 
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Objects;
 
 import org.restlet.resource.Delete;
 import org.restlet.resource.Get;
@@ -107,8 +108,14 @@ public class L7PoliciesResource extends ServerResource {
             	l7_policy.poolId = jp.getText();
                 continue;
             }
-            if (n.equals("value")) {
-            	l7_policy.action = Short.parseShort(jp.getText());
+            if (n.equals("action")) {
+            	String temp = jp.getText();
+            	if(temp.equalsIgnoreCase("Redirecttopool")){
+            		l7_policy.action = 1;
+            	}
+            	if(temp.equalsIgnoreCase("Reject")){
+            		l7_policy.action = 2;
+            	}
                 continue;
             } 
             

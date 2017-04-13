@@ -104,4 +104,8 @@ public class LBPool {
 		}
 		return null;
 	}
+	
+	public byte getProtocol(){
+    	return this.protocol;
+    }
 }

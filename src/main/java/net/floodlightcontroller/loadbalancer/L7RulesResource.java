@@ -105,7 +105,12 @@ public class L7RulesResource extends ServerResource {
                 continue;
             } 
             if (n.equals("type")) {
-            	l7_rule.type = Short.parseShort(jp.getText());
+            	String temp = jp.getText();
+            	if(temp.equalsIgnoreCase("Filetype")){
+            		l7_rule.type = 1;
+            	} else
+            		l7_rule.type = 0;
+            	
                 continue;
             }
             if (n.equals("value")) {

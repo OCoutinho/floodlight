@@ -14,10 +14,11 @@ public class L7PolicySerializer extends JsonSerializer<L7Policy> {
 			throws IOException, JsonProcessingException {
 		jGen.writeStartObject();
         
-        jGen.writeStringField("action", String.valueOf(l7_policy.action));
+        
         jGen.writeStringField("id", l7_policy.id);
         jGen.writeStringField("vipId", l7_policy.vipId);
         jGen.writeStringField("poolId", l7_policy.poolId);
+        jGen.writeStringField("action", String.valueOf(l7_policy.action));
 
         jGen.writeEndObject();
 		

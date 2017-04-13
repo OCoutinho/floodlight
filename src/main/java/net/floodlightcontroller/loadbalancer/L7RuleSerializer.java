@@ -14,10 +14,10 @@ public class L7RuleSerializer extends JsonSerializer<L7Rule>{
 			throws IOException, JsonProcessingException {
 		jGen.writeStartObject();
 
-		jGen.writeStringField("type", String.valueOf(l7_rule.type));
-		jGen.writeStringField("value", l7_rule.value);
 		jGen.writeStringField("id", l7_rule.id);
 		jGen.writeStringField("policyId", l7_rule.policyId);
+		jGen.writeStringField("type", String.valueOf(l7_rule.type));
+		jGen.writeStringField("value", l7_rule.value);
 
 		jGen.writeEndObject();
 	}
