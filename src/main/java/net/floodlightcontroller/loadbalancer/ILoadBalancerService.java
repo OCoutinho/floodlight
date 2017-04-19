@@ -154,5 +154,12 @@ public interface ILoadBalancerService extends IFloodlightService {
      * @return int: removal status 
      */
     public int removeMonitor(String monitorId);
+    
+    /**
+     * Get statistics of an existing pool.
+     * @param String poolId 
+     * @return int[]: bytesIn, bytesOut, activeConnections , totalConnections 
+     */
+    public LBPoolStats getPoolStats(String poolId);
 
 }
