@@ -7,7 +7,8 @@ import org.projectfloodlight.openflow.protocol.match.Match;
 import org.projectfloodlight.openflow.types.DatapathId;
 import org.projectfloodlight.openflow.types.OFPort;
 import org.projectfloodlight.openflow.types.U64;
-import org.sdnplatform.sync.internal.util.Pair;
+
+import javafx.util.Pair;
 
 import java.util.Map;
 

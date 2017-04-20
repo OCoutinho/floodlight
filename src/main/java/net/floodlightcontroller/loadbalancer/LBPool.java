@@ -17,14 +17,12 @@
 package net.floodlightcontroller.loadbalancer;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 
 import org.projectfloodlight.openflow.types.U64;
 
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
 import net.floodlightcontroller.loadbalancer.LoadBalancer.IPClient;
-import net.floodlightcontroller.statistics.SwitchPortBandwidth;
 
 /**
  * Data structure for Load Balancer based on
@@ -67,11 +65,12 @@ public class LBPool {
 		poolStats = new LBPoolStats();
 	}
 
-	public void setPoolStatistics(U64 bytes){
+	public void setPoolStatistics(U64 bytes,int activeConn){
 		if(bytes !=null){
 			poolStats.bytesIn = bytes.getValue();
-
 			poolStats.bytesOut = bytes.getValue();
+			poolStats.activeConnections = activeConn;
+			poolStats.totalConnections += activeConn;
 		}
 	}
 
@@ -79,7 +78,6 @@ public class LBPool {
 		// simple round robin for now; add different lbmethod later
 		if (members.size() > 0) {
 			previousMemberIndex = (previousMemberIndex + 1) % members.size();
-			poolStats.totalConnections += 1;
 			return members.get(previousMemberIndex);
 		} else {
 			return null;

@@ -45,10 +45,11 @@ import org.projectfloodlight.openflow.types.OFPort;
 import org.projectfloodlight.openflow.types.TransportPort;
 import org.projectfloodlight.openflow.types.U16;
 import org.projectfloodlight.openflow.types.U64;
-import org.sdnplatform.sync.internal.util.Pair;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javafx.util.Pair;
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFMessageListener;
@@ -251,7 +252,7 @@ ILoadBalancerService, IOFMessageListener {
 					// packet out based on table rule
 					pushPacket(pkt, sw, pi.getBufferId(), (pi.getVersion().compareTo(OFVersion.OF_12) < 0) ? pi.getInPort() : pi.getMatch().get(MatchField.IN_PORT), OFPort.TABLE,
 							cntx, true);
-
+					log.info("AAAAAAAAAAA: {}", statisticsService.getFlowBytesCount());
 					return Command.STOP;
 				}
 			}
@@ -625,15 +626,16 @@ ILoadBalancerService, IOFMessageListener {
 					log.info("VIP MATCHES SIZE: {}", flowToVipId.size());
 					for(LBPool pool: pools.values()){
 						U64 bytes = null;
+						int activeConn=0;
 						for(Pair<Match,Integer> match: flowToVipId.keySet()){
 							if(flowToVipId.get(match).equals(pool.vipId)){
-								
-								// numero de ligações activas = vezes que passa neste ciclo /2 ?!?!?!!
-								log.info("AIGHT: {}", statisticsService.getFlowBytesCount().get(match).getValue());
 								bytes = statisticsService.getFlowBytesCount().get(match);
+								activeConn += 1;
+								log.info("AIGHT: {}", bytes);
 							}
 						}
-						pool.setPoolStatistics(bytes);
+						// divide by 2, because 2 flows are set per connection
+						pool.setPoolStatistics(bytes,activeConn/2); 
 					}
 				}
 			}
