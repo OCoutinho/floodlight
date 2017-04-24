@@ -55,7 +55,7 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 	private static final HashMap<NodePortTuple, SwitchPortBandwidth> portStats = new HashMap<NodePortTuple, SwitchPortBandwidth>();
 	private static final HashMap<NodePortTuple, SwitchPortBandwidth> tentativePortStats = new HashMap<NodePortTuple, SwitchPortBandwidth>();
 
-	private static final HashMap<Pair<Match,Integer>, U64> flowByteCount = new HashMap<Pair<Match,Integer>,U64>();
+	private static final HashMap<Pair<Match,Integer>, FlowRuleStats> flowByteCount = new HashMap<Pair<Match,Integer>,FlowRuleStats>();
 
 	/**
 	 * Run periodically to collect all port statistics. This only collects
@@ -141,14 +141,14 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 
 		@Override
 		public void run() {
-			flowByteCount.clear(); // to clear old expired flows
+			flowByteCount.clear(); // to clear expired flows
 			Map<DatapathId, List<OFStatsReply>> replies = getSwitchStatistics(switchService.getAllSwitchDpids(), OFStatsType.FLOW);
 			for (Entry<DatapathId, List<OFStatsReply>> e : replies.entrySet()) {
 				for (OFStatsReply r : e.getValue()) {
 					OFFlowStatsReply psr = (OFFlowStatsReply) r;
 					for (OFFlowStatsEntry pse : psr.getEntries()) {
 						Pair<Match, Integer> pair = new Pair<Match,Integer>(pse.getMatch(),pse.getPriority());
-						flowByteCount.put(pair,pse.getByteCount());
+						flowByteCount.put(pair,FlowRuleStats.of(pse.getByteCount(),pse.getPacketCount() ,pse.getDurationSec()));
 					}
 				}
 			}
@@ -258,9 +258,8 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 	 */
 
 	@Override
-	public Map<Pair<Match, Integer>, U64> getFlowBytesCount(){		 
+	public Map<Pair<Match, Integer>, FlowRuleStats> getAllFlowStats(){		 
 		return Collections.unmodifiableMap(flowByteCount);
-
 	}
 
 	@Override

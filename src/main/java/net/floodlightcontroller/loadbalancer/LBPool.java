@@ -65,12 +65,11 @@ public class LBPool {
 		poolStats = new LBPoolStats();
 	}
 
-	public void setPoolStatistics(U64 bytes,int activeConn){
+	public void setPoolStatistics(U64 bytes,U64 packets,int activeConn){
 		if(bytes !=null){
-			poolStats.bytesIn = bytes.getValue();
-			poolStats.bytesOut = bytes.getValue();
+			poolStats.packets = packets.getValue()*2;
+			poolStats.totalBytes = bytes.getValue()*2;
 			poolStats.activeConnections = activeConn;
-			poolStats.totalConnections += activeConn;
 		}
 	}
 

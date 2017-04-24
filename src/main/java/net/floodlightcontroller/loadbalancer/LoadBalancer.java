@@ -77,6 +77,7 @@ import net.floodlightcontroller.restserver.IRestApiService;
 import net.floodlightcontroller.routing.IRoutingService;
 import net.floodlightcontroller.routing.Path;
 import net.floodlightcontroller.staticentry.IStaticEntryPusherService;
+import net.floodlightcontroller.statistics.FlowRuleStats;
 import net.floodlightcontroller.statistics.IStatisticsService;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
 import net.floodlightcontroller.topology.ITopologyService;
@@ -252,7 +253,7 @@ ILoadBalancerService, IOFMessageListener {
 					// packet out based on table rule
 					pushPacket(pkt, sw, pi.getBufferId(), (pi.getVersion().compareTo(OFVersion.OF_12) < 0) ? pi.getInPort() : pi.getMatch().get(MatchField.IN_PORT), OFPort.TABLE,
 							cntx, true);
-					log.info("AAAAAAAAAAA: {}", statisticsService.getFlowBytesCount());
+
 					return Command.STOP;
 				}
 			}
@@ -611,6 +612,7 @@ ILoadBalancerService, IOFMessageListener {
 				fmb.setMatch(mb.build());
 				sfpService.addFlow(entryName, fmb.build(), sw);
 				Pair<Match, Integer> pair = new Pair<Match,Integer>(mb.build(),LB_PRIORITY);
+				log.info("TIMES HERE!");
 				flowToVipId.put(pair, member.vipId);
 			}
 		}
@@ -625,17 +627,17 @@ ILoadBalancerService, IOFMessageListener {
 				if(!flowToVipId.isEmpty()){
 					log.info("VIP MATCHES SIZE: {}", flowToVipId.size());
 					for(LBPool pool: pools.values()){
-						U64 bytes = null;
+						FlowRuleStats frs = null;
 						int activeConn=0;
 						for(Pair<Match,Integer> match: flowToVipId.keySet()){
 							if(flowToVipId.get(match).equals(pool.vipId)){
-								bytes = statisticsService.getFlowBytesCount().get(match);
+								frs = statisticsService.getAllFlowStats().get(match);
 								activeConn += 1;
-								log.info("AIGHT: {}", bytes);
 							}
-						}
-						// divide by 2, because 2 flows are set per connection
-						pool.setPoolStatistics(bytes,activeConn/2); 
+						} // Use Duration for activeConn???	 Bytes e Packets nao estao a ser bem contados					
+						if(frs !=null)
+							// divide by 2, because 2 flows are set per connection - WRONGGGGGGGGGGGG DEPENDES ON THE SWITHCES BETWEEN HOSTS
+							pool.setPoolStatistics(frs.getByteCount(),frs.getPacketCount(),activeConn/2); 
 					}
 				}
 			}
@@ -798,7 +800,7 @@ ILoadBalancerService, IOFMessageListener {
 
 	@Override
 	public LBPoolStats getPoolStats(String poolId){		
-		if(pools.containsKey(poolId)){
+		if(pools != null && pools.containsKey(poolId)){
 			LBPoolStats pool_stats = pools.get(poolId).poolStats;
 			if(pool_stats != null)
 				return pool_stats.getStats();

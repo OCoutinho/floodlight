@@ -15,10 +15,9 @@ public class LBPoolStatsSerializer extends JsonSerializer<LBPoolStats>{
 	JsonProcessingException {
 		jGen.writeStartObject();
 
-		jGen.writeStringField("Bytes In", String.valueOf(poolStats.bytesIn));
-		jGen.writeStringField("Bytes Out", String.valueOf(poolStats.bytesOut));
+		jGen.writeStringField("Total Bytes", String.valueOf(poolStats.totalBytes));
+		jGen.writeStringField("Total Packets", String.valueOf(poolStats.packets));
 		jGen.writeStringField("Active Connections", String.valueOf(poolStats.activeConnections));
-		jGen.writeStringField("Total Connections", String.valueOf(poolStats.totalConnections));
 
 		jGen.writeEndObject();
 
