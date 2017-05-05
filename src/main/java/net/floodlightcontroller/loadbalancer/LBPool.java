@@ -17,8 +17,10 @@
 package net.floodlightcontroller.loadbalancer;
 
 import java.util.ArrayList;
+import java.util.Set;
 
-import org.projectfloodlight.openflow.types.U64;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
@@ -34,6 +36,7 @@ import net.floodlightcontroller.loadbalancer.LoadBalancer.IPClient;
 
 @JsonSerialize(using=LBPoolSerializer.class)
 public class LBPool {
+	protected static Logger log = LoggerFactory.getLogger(LBPool.class);
 	protected String id;
 	protected String name;
 	protected String tenantId;
@@ -48,7 +51,7 @@ public class LBPool {
 	protected String vipId;
 
 	protected int previousMemberIndex;
-	protected LBPoolStats poolStats;
+	protected LBStats poolStats;
 
 	public LBPool() {
 		id = String.valueOf((int) (Math.random()*10000));
@@ -62,14 +65,25 @@ public class LBPool {
 		adminState = 0;
 		status = 0;
 		previousMemberIndex = -1;
-		poolStats = new LBPoolStats();
+		poolStats = new LBStats();
 	}
 
-	public void setPoolStatistics(U64 bytes,U64 packets,int activeConn){
-		if(bytes !=null){
-			poolStats.packets = packets.getValue()*2;
-			poolStats.totalBytes = bytes.getValue()*2;
-			poolStats.activeConnections = activeConn;
+	public void setPoolStatistics(Set<Long> bytesIn,Set<Long> bytesOut,int activeFlows){
+		if(!bytesIn.isEmpty() && !bytesOut.isEmpty()){
+			long sumIn = 0;
+			long sumOut = 0; 
+			for(Long bytes: bytesIn){
+				sumIn += bytes;
+			}
+			poolStats.bytesIn = sumIn; 
+			
+			for(Long bytes: bytesOut){
+				sumOut += bytes;
+			}
+			poolStats.bytesOut = sumOut;
+
+			poolStats.activeFlows = activeFlows;
+			log.info("IN: " + sumIn + "OUT: " + sumOut);
 		}
 	}
 

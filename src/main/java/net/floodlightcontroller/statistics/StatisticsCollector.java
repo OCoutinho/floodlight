@@ -55,7 +55,7 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 	private static final HashMap<NodePortTuple, SwitchPortBandwidth> portStats = new HashMap<NodePortTuple, SwitchPortBandwidth>();
 	private static final HashMap<NodePortTuple, SwitchPortBandwidth> tentativePortStats = new HashMap<NodePortTuple, SwitchPortBandwidth>();
 
-	private static final HashMap<Pair<Match,Integer>, FlowRuleStats> flowByteCount = new HashMap<Pair<Match,Integer>,FlowRuleStats>();
+	private static final HashMap<Pair<Match,DatapathId>, FlowRuleStats> flowStats = new HashMap<Pair<Match,DatapathId>,FlowRuleStats>();
 
 	/**
 	 * Run periodically to collect all port statistics. This only collects
@@ -141,14 +141,20 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 
 		@Override
 		public void run() {
-			flowByteCount.clear(); // to clear expired flows
+			flowStats.clear(); // to clear expired flows
 			Map<DatapathId, List<OFStatsReply>> replies = getSwitchStatistics(switchService.getAllSwitchDpids(), OFStatsType.FLOW);
 			for (Entry<DatapathId, List<OFStatsReply>> e : replies.entrySet()) {
 				for (OFStatsReply r : e.getValue()) {
 					OFFlowStatsReply psr = (OFFlowStatsReply) r;
 					for (OFFlowStatsEntry pse : psr.getEntries()) {
-						Pair<Match, Integer> pair = new Pair<Match,Integer>(pse.getMatch(),pse.getPriority());
-						flowByteCount.put(pair,FlowRuleStats.of(pse.getByteCount(),pse.getPacketCount() ,pse.getDurationSec()));
+						Pair<Match, DatapathId> pair = new Pair<Match,DatapathId>(pse.getMatch(),e.getKey());
+						flowStats.put(pair,FlowRuleStats.of(
+								pse.getByteCount(),
+								pse.getPacketCount(),
+								pse.getPriority(),
+								pse.getHardTimeout(),
+								pse.getIdleTimeout(),
+								pse.getDurationSec()));
 					}
 				}
 			}
@@ -258,10 +264,22 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 	 */
 
 	@Override
-	public Map<Pair<Match, Integer>, FlowRuleStats> getAllFlowStats(){		 
-		return Collections.unmodifiableMap(flowByteCount);
+	public Map<Pair<Match, DatapathId>, FlowRuleStats> getFlowStats(){		 
+		return Collections.unmodifiableMap(flowStats);
 	}
 
+	@Override
+	public Set<FlowRuleStats> getFlowStats(DatapathId dpid){
+		//!!!
+		Set<FlowRuleStats> frs = new HashSet<FlowRuleStats>();
+		for(Pair<Match,DatapathId> pair: flowStats.keySet()){
+			if(pair.getValue().equals(dpid))
+				frs.add(flowStats.get(pair));
+		}
+		return frs;
+	}
+	
+	
 	@Override
 	public SwitchPortBandwidth getBandwidthConsumption(DatapathId dpid, OFPort p) {
 		return portStats.get(new NodePortTuple(dpid, p));

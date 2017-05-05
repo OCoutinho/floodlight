@@ -10,10 +10,13 @@ import org.projectfloodlight.openflow.types.OFPort;
 import javafx.util.Pair;
 
 import java.util.Map;
+import java.util.Set;
 
 public interface IStatisticsService extends IFloodlightService {
 	
-	public Map<Pair<Match,Integer>, FlowRuleStats> getAllFlowStats();
+	public Map<Pair<Match,DatapathId>, FlowRuleStats> getFlowStats();
+	
+	public Set<FlowRuleStats> getFlowStats(DatapathId dpid);
 
 	public SwitchPortBandwidth getBandwidthConsumption(DatapathId dpid, OFPort p);
 		

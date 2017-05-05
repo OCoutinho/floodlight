@@ -160,6 +160,6 @@ public interface ILoadBalancerService extends IFloodlightService {
      * @param String poolId 
      * @return int[]: bytesIn, bytesOut, activeConnections , totalConnections 
      */
-    public LBPoolStats getPoolStats(String poolId);
+    public LBStats getPoolStats(String poolId);
 
 }

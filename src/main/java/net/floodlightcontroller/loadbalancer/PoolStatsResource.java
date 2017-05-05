@@ -9,7 +9,7 @@ public class PoolStatsResource extends ServerResource {
 protected static Logger log = LoggerFactory.getLogger(PoolStatsResource.class);
     
     @Get("json")
-    public LBPoolStats retrieve() {
+    public LBStats retrieve() {
         ILoadBalancerService lbs =
                 (ILoadBalancerService)getContext().getAttributes().
                     get(ILoadBalancerService.class.getCanonicalName());

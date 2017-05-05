@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.projectfloodlight.openflow.protocol.OFFlowMod;
@@ -116,7 +117,7 @@ ILoadBalancerService, IOFMessageListener {
 	protected IOFSwitchService switchService;
 	protected IStatisticsService statisticsService;
 	protected IThreadPoolService threadService;
-	
+
 	protected HashMap<String, LBVip> vips;
 	protected HashMap<String, LBPool> pools;
 	protected HashMap<String, LBMember> members;
@@ -124,8 +125,7 @@ ILoadBalancerService, IOFMessageListener {
 	protected HashMap<Integer, MacAddress> vipIpToMac;
 	protected HashMap<Integer, String> memberIpToId;
 	protected HashMap<IPClient, LBMember> clientToMember;
-	protected HashMap<IDevice,String> deviceToMemberId;
-	protected HashMap<Pair<Match,Integer>,String> flowToVipId;
+	protected HashMap<Pair<Match,DatapathId>,String> flowToVipId;
 
 	//Copied from Forwarding with message damper routine for pushing proxy Arp 
 	protected static int OFMESSAGE_DAMPER_CAPACITY = 10000; // ms. 
@@ -611,7 +611,7 @@ ILoadBalancerService, IOFMessageListener {
 				fmb.setPriority(U16.t(LB_PRIORITY));
 				fmb.setMatch(mb.build());
 				sfpService.addFlow(entryName, fmb.build(), sw);
-				Pair<Match, Integer> pair = new Pair<Match,Integer>(mb.build(),LB_PRIORITY);
+				Pair<Match, DatapathId> pair = new Pair<Match,DatapathId>(mb.build(),sw);
 				log.info("TIMES HERE!");
 				flowToVipId.put(pair, member.vipId);
 			}
@@ -619,25 +619,33 @@ ILoadBalancerService, IOFMessageListener {
 		return;
 	}
 
+	// NAO FUNCIONA PARA O CASO EM QUE UNS SWITCHES RECEBEM OUTROS NÃO E DEPOIS VAO SOMAR BYTES QUE NAO DEVIAM
+	// SOL: ESCOLHER SWITCHES LIGADOS AOS MEMBROS DA POOL
 	private class SetPoolStats implements Runnable {
-
 		@Override
 		public void run() {
 			if(!pools.isEmpty()){
 				if(!flowToVipId.isEmpty()){
-					log.info("VIP MATCHES SIZE: {}", flowToVipId.size());
+					log.info("MATCHES SIZE: {}", flowToVipId.size());
 					for(LBPool pool: pools.values()){
 						FlowRuleStats frs = null;
-						int activeConn=0;
-						for(Pair<Match,Integer> match: flowToVipId.keySet()){
-							if(flowToVipId.get(match).equals(pool.vipId)){
-								frs = statisticsService.getAllFlowStats().get(match);
-								activeConn += 1;
-							}
-						} // Use Duration for activeConn???	 Bytes e Packets nao estao a ser bem contados					
-						if(frs !=null)
-							// divide by 2, because 2 flows are set per connection - WRONGGGGGGGGGGGG DEPENDES ON THE SWITHCES BETWEEN HOSTS
-							pool.setPoolStatistics(frs.getByteCount(),frs.getPacketCount(),activeConn/2); 
+						int activeFlows = 0;
+						Set<Long> bytesOut = new HashSet<Long>();
+						Set<Long> bytesIn = new HashSet<Long>();
+						for(Pair<Match,DatapathId> pair: flowToVipId.keySet()){
+							if(flowToVipId.get(pair).equals(pool.vipId)){
+								frs = statisticsService.getFlowStats().get(pair);
+								if(frs != null){
+									if(pair.getKey().get(MatchField.IPV4_SRC) != null){
+										log.info("INBOUND TRAFFIC");
+										bytesIn.add(frs.getByteCount().getValue());
+									} else 
+										bytesOut.add(frs.getByteCount().getValue());
+								}
+								activeFlows +=1;
+							}	
+						}				
+						pool.setPoolStatistics(bytesIn,bytesOut,activeFlows); 
 					}
 				}
 			}
@@ -799,9 +807,9 @@ ILoadBalancerService, IOFMessageListener {
 	}
 
 	@Override
-	public LBPoolStats getPoolStats(String poolId){		
+	public LBStats getPoolStats(String poolId){		
 		if(pools != null && pools.containsKey(poolId)){
-			LBPoolStats pool_stats = pools.get(poolId).poolStats;
+			LBStats pool_stats = pools.get(poolId).poolStats;
 			if(pool_stats != null)
 				return pool_stats.getStats();
 		}
@@ -890,9 +898,8 @@ ILoadBalancerService, IOFMessageListener {
 		vipIpToId = new HashMap<Integer, String>();
 		vipIpToMac = new HashMap<Integer, MacAddress>();
 		memberIpToId = new HashMap<Integer, String>();
-		deviceToMemberId = new HashMap<IDevice, String>();
-		flowToVipId = new HashMap<Pair<Match,Integer>,String>();
-		
+		flowToVipId = new HashMap<Pair<Match,DatapathId>,String>();
+
 		threadService.getScheduledExecutor().scheduleAtFixedRate(new SetPoolStats(), 15, 15, TimeUnit.SECONDS);
 	}
 
@@ -902,6 +909,5 @@ ILoadBalancerService, IOFMessageListener {
 		restApiService.addRestletRoutable(new LoadBalancerWebRoutable());
 		debugCounterService.registerModule(this.getName());
 		counterPacketOut = debugCounterService.registerCounter(this.getName(), "packet-outs-written", "Packet outs written by the LoadBalancer", MetaData.WARN);
-		statisticsService.collectStatistics(true);
 	}
 }
