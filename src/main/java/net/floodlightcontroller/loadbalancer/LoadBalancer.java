@@ -621,6 +621,7 @@ ILoadBalancerService, IOFMessageListener {
 
 	// NAO FUNCIONA PARA O CASO EM QUE UNS SWITCHES RECEBEM OUTROS NÃO E DEPOIS VAO SOMAR BYTES QUE NAO DEVIAM
 	// SOL: ESCOLHER SWITCHES LIGADOS AOS MEMBROS DA POOL
+	// not working for OF  1.1?, 1.2?, 1.5? 
 	private class SetPoolStats implements Runnable {
 		@Override
 		public void run() {

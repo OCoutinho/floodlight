@@ -48,6 +48,8 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 
 	private static final long BITS_PER_BYTE = 8;
 	private static final long MILLIS_PER_SEC = 1000;
+	private static final long ONE_KBIT = 1000;
+
 
 	private static final String INTERVAL_PORT_STATS_STR = "collectionIntervalPortStatsSeconds";
 	private static final String ENABLED_STR = "enable";
@@ -118,7 +120,24 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 							IOFSwitch sw = switchService.getSwitch(npt.getNodeId());
 							long speed = 0;
 							if (sw != null) { /* could have disconnected; we'll assume zero-speed then */
-								speed = sw.getPort(npt.getPortId()).getCurrSpeed();
+								if (sw.getOFFactory().getVersion().compareTo(OFVersion.OF_10) == 0) {
+									Set<OFPortFeatures> portFeature = sw.getPort(npt.getPortId()).getCurr();
+									for(OFPortFeatures feature: portFeature){ // Due to some features having SPEED.NONE
+										if(speed <= feature.getPortSpeed().getSpeedBps()/ONE_KBIT)
+											speed = feature.getPortSpeed().getSpeedBps()/ONE_KBIT;
+									}
+								}
+								if (sw.getOFFactory().getVersion().compareTo(OFVersion.OF_10) > 0 && sw.getOFFactory().getVersion().compareTo(OFVersion.OF_14) < 0) {
+									speed = sw.getPort(npt.getPortId()).getCurrSpeed();
+								}
+								if (sw.getOFFactory().getVersion().compareTo(OFVersion.OF_14) == 0 || sw.getOFFactory().getVersion().compareTo(OFVersion.OF_15) == 0 ){
+									List<OFPortDescProp> portDesc = sw.getPort(npt.getPortId()).getProperties();
+									for(OFPortDescProp descProp:  portDesc){
+										OFPortDescPropEthernet net = (OFPortDescPropEthernet) descProp;
+										speed = net.getCurrSpeed();
+									}
+								}
+
 							}
 							long timeDifSec = (System.currentTimeMillis() - spb.getUpdateTime()) / MILLIS_PER_SEC;
 							portStats.put(npt, SwitchPortBandwidth.of(npt.getNodeId(), npt.getPortId(), 
@@ -148,13 +167,29 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 					OFFlowStatsReply psr = (OFFlowStatsReply) r;
 					for (OFFlowStatsEntry pse : psr.getEntries()) {
 						Pair<Match, DatapathId> pair = new Pair<Match,DatapathId>(pse.getMatch(),e.getKey());
-						flowStats.put(pair,FlowRuleStats.of(
-								pse.getByteCount(),
-								pse.getPacketCount(),
-								pse.getPriority(),
-								pse.getHardTimeout(),
-								pse.getIdleTimeout(),
-								pse.getDurationSec()));
+
+						IOFSwitch sw = switchService.getSwitch(e.getKey());
+						if (sw.getOFFactory().getVersion().compareTo(OFVersion.OF_15) < 0){
+							flowStats.put(pair,FlowRuleStats.of(
+									pse.getByteCount(),
+									pse.getPacketCount(),
+									pse.getPriority(),
+									pse.getHardTimeout(),
+									pse.getIdleTimeout(),
+									pse.getDurationSec()));
+						}else{
+							try{
+								flowStats.put(pair,FlowRuleStats.of(
+										pse.getByteCount(),
+										pse.getPacketCount(),
+										pse.getPriority(),
+										pse.getHardTimeout(),
+										pse.getIdleTimeout(),
+										pse.getDurationSec()));
+							} catch(UnsupportedOperationException exc){
+								log.error("OpenFlow version 1.5 flow statistics collection error: " + exc);
+							}
+						}
 					}
 				}
 			}
@@ -278,8 +313,8 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 		}
 		return frs;
 	}
-	
-	
+
+
 	@Override
 	public SwitchPortBandwidth getBandwidthConsumption(DatapathId dpid, OFPort p) {
 		return portStats.get(new NodePortTuple(dpid, p));
@@ -399,12 +434,20 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 			switch (statsType) {
 			case FLOW:
 				match = sw.getOFFactory().buildMatch().build();
-				req = sw.getOFFactory().buildFlowStatsRequest()
-						.setMatch(match)
-						.setOutPort(OFPort.ANY)
-						.setOutGroup(OFGroup.ANY)
-						.setTableId(TableId.ALL)
-						.build();
+				if (sw.getOFFactory().getVersion().compareTo(OFVersion.OF_11) >= 0) {
+					req = sw.getOFFactory().buildFlowStatsRequest()
+							.setMatch(match)
+							.setOutPort(OFPort.ANY)
+							.setOutGroup(OFGroup.ANY)
+							.setTableId(TableId.ALL)
+							.build();
+				} else{
+					req = sw.getOFFactory().buildFlowStatsRequest()
+							.setMatch(match)
+							.setOutPort(OFPort.ANY)
+							.setTableId(TableId.ALL)
+							.build();
+				}
 				break;
 			case AGGREGATE:
 				match = sw.getOFFactory().buildMatch().build();
