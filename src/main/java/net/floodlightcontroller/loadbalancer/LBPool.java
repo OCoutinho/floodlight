@@ -17,8 +17,12 @@
 package net.floodlightcontroller.loadbalancer;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Random;
 import java.util.Set;
 
+import org.projectfloodlight.openflow.types.U64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,6 +56,11 @@ public class LBPool {
 
 	protected int previousMemberIndex;
 	protected LBStats poolStats;
+	
+	protected final static short ROUND_ROBIN = 1;
+	protected final static short STATISTICS = 2;
+	protected final static short WEIGHTED_RR = 3;
+
 
 	public LBPool() {
 		id = String.valueOf((int) (Math.random()*10000));
@@ -65,7 +74,7 @@ public class LBPool {
 		adminState = 0;
 		status = 0;
 		previousMemberIndex = -1;
-		poolStats = new LBStats();
+		poolStats = new LBStats();		
 	}
 
 	public void setPoolStatistics(Set<Long> bytesIn,Set<Long> bytesOut,int activeFlows){
@@ -87,14 +96,53 @@ public class LBPool {
 		}
 	}
 
-	public String pickMember(IPClient client) {
-		// simple round robin for now; add different lbmethod later
-		if (members.size() > 0) {
-			previousMemberIndex = (previousMemberIndex + 1) % members.size();
-			return members.get(previousMemberIndex);
-		} else {
-			return null;
-		}
-	}
+	public String pickMember(IPClient client, HashMap<String,U64> membersBandwidth,HashMap<String,Short> membersWeight) {
 
+		// Get the members that belong to this pool and the statistics for them
+		if(members.size() > 0){
+			if (lbMethod == STATISTICS && !membersBandwidth.isEmpty() && membersBandwidth.values() !=null) {	
+				ArrayList<String> poolMembersId = new ArrayList<String>();
+				for(String memberId: membersBandwidth.keySet()){
+					for(int i=0;i<members.size();i++){
+						if(members.get(i).equals(memberId)){
+							poolMembersId.add(memberId);
+						}
+					}
+				}
+				// return the member which has the minimum bandwidth usage, out of this pool members
+				if(!poolMembersId.isEmpty()){
+					ArrayList<U64> bandwidthValues = new ArrayList<U64>();
+
+					for(int j=0;j<poolMembersId.size();j++){
+						bandwidthValues.add(membersBandwidth.get(poolMembersId.get(j)));
+					}
+					log.debug("Member picked using LB statistics: {}", poolMembersId.get(bandwidthValues.indexOf(Collections.min(bandwidthValues))));
+					return poolMembersId.get(bandwidthValues.indexOf(Collections.min(bandwidthValues)));
+				}
+				return null;
+			} else if(lbMethod == WEIGHTED_RR && !membersWeight.isEmpty()){
+				Random randomNumb = new Random();
+				short totalWeight = 0; 
+
+				for(Short weight: membersWeight.values()){
+					totalWeight += weight;
+				}
+				int rand = randomNumb.nextInt(totalWeight);
+				short val = 0;
+				for(String memberId: membersWeight.keySet()){
+					val += membersWeight.get(memberId);
+					if(val > rand){
+						log.debug("Member picked using WRR: {}",memberId);
+						return memberId;
+					}
+				}
+				return null;
+			}else {
+				// simple round robin
+				previousMemberIndex = (previousMemberIndex + 1) % members.size();
+				return members.get(previousMemberIndex);
+			}
+		}
+		return null;
+	}
 }

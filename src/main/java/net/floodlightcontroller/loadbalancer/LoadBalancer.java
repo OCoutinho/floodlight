@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -80,6 +81,7 @@ import net.floodlightcontroller.routing.Path;
 import net.floodlightcontroller.staticentry.IStaticEntryPusherService;
 import net.floodlightcontroller.statistics.FlowRuleStats;
 import net.floodlightcontroller.statistics.IStatisticsService;
+import net.floodlightcontroller.statistics.SwitchPortBandwidth;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
 import net.floodlightcontroller.topology.ITopologyService;
 import net.floodlightcontroller.util.FlowModUtils;
@@ -125,7 +127,9 @@ ILoadBalancerService, IOFMessageListener {
 	protected HashMap<Integer, MacAddress> vipIpToMac;
 	protected HashMap<Integer, String> memberIpToId;
 	protected HashMap<IPClient, LBMember> clientToMember;
+	protected HashMap<String, DatapathId> memberIdToDpid;
 	protected HashMap<Pair<Match,DatapathId>,String> flowToVipId;
+	
 
 	//Copied from Forwarding with message damper routine for pushing proxy Arp 
 	protected static int OFMESSAGE_DAMPER_CAPACITY = 10000; // ms. 
@@ -243,7 +247,20 @@ ILoadBalancerService, IOFMessageListener {
 					LBPool pool = pools.get(vip.pickPool(client));
 					if (pool == null)			// fix dereference violations
 						return Command.CONTINUE;
-					LBMember member = members.get(pool.pickMember(client));
+
+					HashMap<String, Short> memberWeights = new HashMap<String, Short>();
+					HashMap<String, U64> memberPortBandwidth = new HashMap<String, U64>();
+
+					if(pool.lbMethod == LBPool.WEIGHTED_RR){
+						for(String memberId: pool.members){
+							memberWeights.put(memberId,members.get(memberId).weight);
+						}
+					}
+					// Switch statistics collection
+					if(pool.lbMethod == LBPool.STATISTICS && statisticsService != null)
+						memberPortBandwidth = collectSwitchPortBandwidth();
+
+					LBMember member = members.get(pool.pickMember(client,memberPortBandwidth,memberWeights));
 					if(member == null)			//fix dereference violations
 						return Command.CONTINUE;
 
@@ -260,6 +277,44 @@ ILoadBalancerService, IOFMessageListener {
 		}
 		// bypass non-load-balanced traffic for normal processing (forwarding)
 		return Command.CONTINUE;
+	}
+
+	/**
+	 * used to collect statistics from members switch port
+	 * @return HashMap<String, U64> portBandwidth <memberId,bitsPerSecond RX> of port connected to member
+	 */
+	public HashMap<String, U64> collectSwitchPortBandwidth(){
+		HashMap<String,U64> memberPortBandwidth = new HashMap<String, U64>();
+		HashMap<IDevice, String> deviceToMemberId = new HashMap<IDevice, String>();
+
+
+		// retrieve all known devices to know which ones are attached to the members
+		Collection<? extends IDevice> allDevices = deviceManagerService.getAllDevices();
+
+		for (IDevice d : allDevices) {
+			for (int j = 0; j < d.getIPv4Addresses().length; j++) {
+				if(members != null){
+					for(LBMember member: members.values()){
+						if (member.address == d.getIPv4Addresses()[j].getInt())
+							deviceToMemberId.put(d, member.id);
+					}
+				}
+			}
+		}
+		// collect statistics of the switch ports attached to the members
+		if(deviceToMemberId !=null){
+			for(IDevice membersDevice: deviceToMemberId.keySet()){
+				String memberId = deviceToMemberId.get(membersDevice);
+				for(SwitchPort dstDap: membersDevice.getAttachmentPoints()){					
+					SwitchPortBandwidth bandwidthOfPort = statisticsService.getBandwidthConsumption(dstDap.getNodeId(), dstDap.getPortId());
+					if(bandwidthOfPort != null) // needs time for 1st collection, this avoids nullPointerException 
+						memberPortBandwidth.put(memberId, bandwidthOfPort.getBitsPerSecondRx());
+					memberIdToDpid.put(memberId, dstDap.getNodeId());
+				}
+			}
+		}
+		log.info("MEMBER TO SWITCH MAC: " + memberIdToDpid);
+		return memberPortBandwidth;
 	}
 
 	/**
@@ -619,8 +674,6 @@ ILoadBalancerService, IOFMessageListener {
 		return;
 	}
 
-	// NAO FUNCIONA PARA O CASO EM QUE UNS SWITCHES RECEBEM OUTROS NÃO E DEPOIS VAO SOMAR BYTES QUE NAO DEVIAM
-	// SOL: ESCOLHER SWITCHES LIGADOS AOS MEMBROS DA POOL
 	// not working for OF  1.1?, 1.2?, 1.5? 
 	private class SetPoolStats implements Runnable {
 		@Override
@@ -628,25 +681,29 @@ ILoadBalancerService, IOFMessageListener {
 			if(!pools.isEmpty()){
 				if(!flowToVipId.isEmpty()){
 					log.info("MATCHES SIZE: {}", flowToVipId.size());
+					if(memberIdToDpid.isEmpty())
+						collectSwitchPortBandwidth(); //
 					for(LBPool pool: pools.values()){
 						FlowRuleStats frs = null;
-						int activeFlows = 0;
 						Set<Long> bytesOut = new HashSet<Long>();
 						Set<Long> bytesIn = new HashSet<Long>();
 						for(Pair<Match,DatapathId> pair: flowToVipId.keySet()){
 							if(flowToVipId.get(pair).equals(pool.vipId)){
 								frs = statisticsService.getFlowStats().get(pair);
 								if(frs != null){
-									if(pair.getKey().get(MatchField.IPV4_SRC) != null){
-										log.info("INBOUND TRAFFIC");
-										bytesIn.add(frs.getByteCount().getValue());
-									} else 
-										bytesOut.add(frs.getByteCount().getValue());
+									for(String memberId: pool.members){
+										if(Objects.equals(pair.getValue(), memberIdToDpid.get(memberId))){
+											if(pair.getKey().get(MatchField.IPV4_SRC) != null){
+												log.info("INBOUND TRAFFIC");
+												bytesIn.add(frs.getByteCount().getValue());
+											} else 
+												bytesOut.add(frs.getByteCount().getValue());
+										}				
+									}
 								}
-								activeFlows +=1;
 							}	
 						}				
-						pool.setPoolStatistics(bytesIn,bytesOut,activeFlows); 
+						pool.setPoolStatistics(bytesIn,bytesOut,flowToVipId.size()); 
 					}
 				}
 			}
@@ -818,6 +875,41 @@ ILoadBalancerService, IOFMessageListener {
 	}
 
 	@Override
+	public int setMemberWeight(String memberId, String weight){
+		LBMember member;
+		short value;
+		member = members.get(memberId);
+
+		try{
+			value = Short.parseShort(weight);
+		} catch(Exception e){
+			log.error("Invalid value for member weight " + e.getMessage());
+			return -1;
+		}
+		if(member != null && (value <= 10 && value >= 1)){
+			member.weight = value;
+			return 0;
+		}
+		return -1;
+	}
+
+	public int setPriorityToMember(String poolId ,String memberId){
+		if(pools.containsKey(poolId)) {
+			ArrayList<String> memberIds = pools.get(poolId).members;
+			if(memberIds !=null && members != null && memberIds.contains(memberId)){
+				for (int i = 0; i<memberIds.size(); i++){
+					if(members.get(memberIds.get(i)).id.equals(memberId)){
+						members.get(memberId).weight=(short) (1 + memberIds.size()/2);
+					}else
+						members.get(memberIds.get(i)).weight=1;
+				}
+				return 0;
+			}
+		}
+		return -1;
+	}
+
+	@Override
 	public Collection<LBMonitor> listMonitors() {
 		return null;
 	}
@@ -899,6 +991,7 @@ ILoadBalancerService, IOFMessageListener {
 		vipIpToId = new HashMap<Integer, String>();
 		vipIpToMac = new HashMap<Integer, MacAddress>();
 		memberIpToId = new HashMap<Integer, String>();
+		memberIdToDpid = new HashMap<String, DatapathId>();
 		flowToVipId = new HashMap<Pair<Match,DatapathId>,String>();
 
 		threadService.getScheduledExecutor().scheduleAtFixedRate(new SetPoolStats(), 15, 15, TimeUnit.SECONDS);
