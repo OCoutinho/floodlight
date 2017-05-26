@@ -62,9 +62,4 @@ public class LBMonitor {
         
     }
     
-    public void setPool(String poolId){
-    	this.poolId= poolId;
-    	
-    }
-    
 }

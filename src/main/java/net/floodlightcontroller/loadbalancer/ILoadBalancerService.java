@@ -178,5 +178,7 @@ public interface ILoadBalancerService extends IFloodlightService {
      * @return int: removal status 
      */
     public int removeMonitor(String monitorId);
+    
+    public void healthMonitoring(boolean monitor);
 
 }

@@ -17,6 +17,10 @@
 package net.floodlightcontroller.loadbalancer;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
@@ -32,6 +36,8 @@ import net.floodlightcontroller.loadbalancer.LoadBalancer.IPClient;
 
 @JsonSerialize(using=LBPoolSerializer.class)
 public class LBPool {
+	protected static Logger log = LoggerFactory.getLogger(LBPool.class);
+	
 	protected String id;
     protected String name;
     protected String tenantId;
@@ -46,12 +52,13 @@ public class LBPool {
     protected String vipId;
     
     protected int previousMemberIndex;
-    
+    // !! MUDAR ARRAYLIST MONITORS PARA STRING MONITOR?
     public LBPool() {
         id = String.valueOf((int) (Math.random()*10000));
         name = null;
         tenantId = null;
         netId = null;
+        vipId = null;
         lbMethod = 0;
         protocol = 0;
         members = new ArrayList<String>();
@@ -61,13 +68,20 @@ public class LBPool {
         previousMemberIndex = -1;
     }
     
-    public String pickMember(IPClient client) {
-        // simple round robin for now; add different lbmethod later
+    public String pickMember(IPClient client, HashMap<String, Short> memberStatus) {
         if (members.size() > 0) {
-            previousMemberIndex = (previousMemberIndex + 1) % members.size();
-            return members.get(previousMemberIndex);
-        } else {
+            if(LoadBalancer.isMonitoringEnabled && !monitors.isEmpty()){
+            	for(int i=0;i<members.size();){
+            		previousMemberIndex = (previousMemberIndex + 1) % members.size();	
+            		if(memberStatus.get(members.get(previousMemberIndex)) == 1)
+            			return members.get((previousMemberIndex));     		
+            	}
+            	return null;
+            } else{
+            	previousMemberIndex = (previousMemberIndex + 1) % members.size();
+            	return members.get(previousMemberIndex);
+            }
+        } else
             return null;
-        }
     }
 }

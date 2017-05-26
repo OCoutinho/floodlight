@@ -36,18 +36,21 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 	private static IRestApiService restApiService;
 
 	private static boolean isEnabled = false;
-	
+
 	private static int portStatsInterval = 10; /* could be set by REST API, so not final */
 	private static ScheduledFuture<?> portStatsCollector;
+	private static ScheduledFuture<?> portDescCollector;
 
 	private static final long BITS_PER_BYTE = 8;
 	private static final long MILLIS_PER_SEC = 1000;
-	
+
 	private static final String INTERVAL_PORT_STATS_STR = "collectionIntervalPortStatsSeconds";
 	private static final String ENABLED_STR = "enable";
 
 	private static final HashMap<NodePortTuple, SwitchPortBandwidth> portStats = new HashMap<NodePortTuple, SwitchPortBandwidth>();
 	private static final HashMap<NodePortTuple, SwitchPortBandwidth> tentativePortStats = new HashMap<NodePortTuple, SwitchPortBandwidth>();
+	
+	private static final HashMap<NodePortTuple, PortDesc> portDesc = new HashMap<NodePortTuple, PortDesc>();
 
 	/**
 	 * Run periodically to collect all port statistics. This only collects
@@ -119,10 +122,35 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 									U64.ofRaw((txBytesCounted.getValue() * BITS_PER_BYTE) / timeDifSec), 
 									pse.getRxBytes(), pse.getTxBytes())
 									);
-							
+
 						} else { /* initialize */
 							tentativePortStats.put(npt, SwitchPortBandwidth.of(npt.getNodeId(), npt.getPortId(), U64.ZERO, U64.ZERO, U64.ZERO, pse.getRxBytes(), pse.getTxBytes()));
 						}
+					}
+				}	
+			}
+		}
+	}
+
+
+	private class PortDescCollector implements Runnable {
+		@Override
+		public void run() {
+			Map<DatapathId, List<OFStatsReply>> replies = getSwitchStatistics(switchService.getAllSwitchDpids(), OFStatsType.PORT_DESC);
+			for (Entry<DatapathId, List<OFStatsReply>> e : replies.entrySet()) {
+				for (OFStatsReply r : e.getValue()) {
+					OFPortDescStatsReply psr = (OFPortDescStatsReply) r;	
+					for (OFPortDesc pse : psr.getEntries()) {
+						NodePortTuple npt = new NodePortTuple(e.getKey(), pse.getPortNo());
+						portDesc.put(npt,PortDesc.of(e.getKey(),
+								pse.getPortNo(),
+								pse.getName(),
+								pse.getState(),
+								pse.getConfig(),
+								pse.isEnabled()));
+						//log.info("Prop " + pse.getProperties()); //1.0 ao 1.3 nao tem prop, 1.4 e 1.5 tem proprieties mas nao supp ou advr ou speeds
+
+						
 					}
 				}
 			}
@@ -160,11 +188,11 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 			statsReply = getSwitchStatistics(switchId, statType);
 		}
 	}
-	
+
 	/*
 	 * IFloodlightModule implementation
 	 */
-	
+
 	@Override
 	public Collection<Class<? extends IFloodlightService>> getModuleServices() {
 		Collection<Class<? extends IFloodlightService>> l =
@@ -230,12 +258,22 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 	/*
 	 * IStatisticsService implementation
 	 */
+
+	@Override
+	public Map<NodePortTuple, PortDesc> getPortDesc() {
+		return Collections.unmodifiableMap(portDesc);
+	}
+	
+	@Override
+	public PortDesc getPortDesc(DatapathId dpid, OFPort port) {
+		return portDesc.get(new NodePortTuple(dpid,port));
+	}
 	
 	@Override
 	public SwitchPortBandwidth getBandwidthConsumption(DatapathId dpid, OFPort p) {
 		return portStats.get(new NodePortTuple(dpid, p));
 	}
-	
+
 
 	@Override
 	public Map<NodePortTuple, SwitchPortBandwidth> getBandwidthConsumption() {
@@ -253,26 +291,27 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 		} 
 		/* otherwise, state is not changing; no-op */
 	}
-	
+
 	/*
 	 * Helper functions
 	 */
-	
+
 	/**
 	 * Start all stats threads.
 	 */
 	private void startStatisticsCollection() {
 		portStatsCollector = threadPoolService.getScheduledExecutor().scheduleAtFixedRate(new PortStatsCollector(), portStatsInterval, portStatsInterval, TimeUnit.SECONDS);
 		tentativePortStats.clear(); /* must clear out, otherwise might have huge BW result if present and wait a long time before re-enabling stats */
+		portDescCollector = threadPoolService.getScheduledExecutor().scheduleAtFixedRate(new PortDescCollector(), portStatsInterval, portStatsInterval, TimeUnit.SECONDS);
 		log.warn("Statistics collection thread(s) started");
 	}
-	
+
 	/**
 	 * Stop all stats threads.
 	 */
 	private void stopStatisticsCollection() {
-		if (!portStatsCollector.cancel(false)) {
-			log.error("Could not cancel port stats thread");
+		if (!portStatsCollector.cancel(false) || !portDescCollector.cancel(false)) {
+			log.error("Could not cancel stats thread");
 		} else {
 			log.warn("Statistics collection thread(s) stopped");
 		}
@@ -313,7 +352,7 @@ public class StatisticsCollector implements IFloodlightModule, IStatisticsServic
 			for (GetStatisticsThread curThread : pendingRemovalThreads) {
 				activeThreads.remove(curThread);
 			}
-			
+
 			/* clear the list so we don't try to double remove them */
 			pendingRemovalThreads.clear();
 

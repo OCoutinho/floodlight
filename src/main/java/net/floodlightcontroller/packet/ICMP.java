@@ -31,8 +31,10 @@ public class ICMP extends BasePacket {
     protected byte icmpType;
     protected byte icmpCode;
     protected short checksum;
+    protected short identifier;
+    protected short sequence;
 
-    // The value is the number of bytes of padding
+	// The value is the number of bytes of padding
     public static final Map<Byte, Short> paddingMap;
 
     public static final byte ECHO_REPLY = 0x0;
@@ -94,6 +96,25 @@ public class ICMP extends BasePacket {
         this.checksum = checksum;
         return this;
     }
+    
+    public short getIdentifier() {
+		return identifier;
+	}
+
+	public ICMP setIdentifier(short identifier) {
+		this.identifier = identifier;
+		return this;
+	}
+
+	public short getSequence() {
+		return sequence;
+	}
+
+	public ICMP setSequence(short sequence) {
+		this.sequence = sequence;
+		return this;
+	}
+    
 
     /**
      * Serializes the packet. Will compute and set the following fields if they
@@ -107,7 +128,7 @@ public class ICMP extends BasePacket {
         if (paddingMap.containsKey(this.icmpType))
             padding = paddingMap.get(this.icmpType);
 
-        int length = 4 + padding;
+        int length = 8 + padding; // 4
         byte[] payloadData = null;
         if (payload != null) {
             payload.setParent(this);
@@ -121,6 +142,8 @@ public class ICMP extends BasePacket {
         bb.put(this.icmpType);
         bb.put(this.icmpCode);
         bb.putShort(this.checksum);
+        bb.putShort(this.identifier); //
+        bb.putShort(this.sequence); //
         for (int i = 0; i < padding; i++)
             bb.put((byte) 0);
 

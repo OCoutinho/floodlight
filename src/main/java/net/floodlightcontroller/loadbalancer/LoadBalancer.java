@@ -17,7 +17,7 @@
 package net.floodlightcontroller.loadbalancer;
 
 import java.util.*;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.projectfloodlight.openflow.protocol.OFFlowMod;
@@ -59,7 +59,6 @@ import net.floodlightcontroller.devicemanager.IDevice;
 import net.floodlightcontroller.devicemanager.IDeviceService;
 import net.floodlightcontroller.devicemanager.SwitchPort;
 import net.floodlightcontroller.packet.ARP;
-import net.floodlightcontroller.packet.Data;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.ICMP;
 import net.floodlightcontroller.packet.IPacket;
@@ -70,6 +69,9 @@ import net.floodlightcontroller.restserver.IRestApiService;
 import net.floodlightcontroller.routing.IRoutingService;
 import net.floodlightcontroller.routing.Path;
 import net.floodlightcontroller.staticentry.IStaticEntryPusherService;
+import net.floodlightcontroller.statistics.IStatisticsService;
+import net.floodlightcontroller.statistics.PortDesc;
+import net.floodlightcontroller.statistics.SwitchPortBandwidth;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
 import net.floodlightcontroller.topology.ITopologyService;
 import net.floodlightcontroller.util.FlowModUtils;
@@ -106,6 +108,7 @@ ILoadBalancerService, IOFMessageListener {
 	protected IStaticEntryPusherService sfpService;
 	protected IOFSwitchService switchService;
 	protected IThreadPoolService threadService;
+	protected IStatisticsService statisticsService;
 
 	protected HashMap<String, LBVip> vips;
 	protected HashMap<String, LBPool> pools;
@@ -115,7 +118,12 @@ ILoadBalancerService, IOFMessageListener {
 	protected HashMap<Integer, MacAddress> vipIpToMac;
 	protected HashMap<Integer, String> memberIpToId;
 	protected HashMap<IPClient, LBMember> clientToMember;
-	protected HashMap<Integer, String> monitorIpToId;
+	protected HashMap<Integer, String> monitorIpToId; // !!!
+	protected HashMap<String, SwitchPort> memberIdToSwitchPort;
+
+	private static ScheduledFuture<?> healthMonitoring;
+
+	protected static boolean isMonitoringEnabled = false;
 
 	//Copied from Forwarding with message damper routine for pushing proxy Arp 
 	protected static int OFMESSAGE_DAMPER_CAPACITY = 10000; // ms. 
@@ -207,6 +215,26 @@ ILoadBalancerService, IOFMessageListener {
 				// If match Vip and port, check pool and choose member
 				int destIpAddress = ip_pkt.getDestinationAddress().getInt();
 
+//				int srcIpAddress = ip_pkt.getSourceAddress().getInt();
+//
+//				// !!
+//				if(vipIpToId.containsKey(srcIpAddress)){
+//					log.info("SRC!");
+//					log.info("MEMBER IP= " + IPv4Address.of(destIpAddress));
+//
+//					if(memberIpToId.containsKey(destIpAddress)){
+//						String memberId = memberIpToId.get(destIpAddress);
+//						members.get(memberId).status = (short) 1;
+//					}
+//
+//					/* Saber a pool srcIpAddress em questao
+//					 * contar as vezes que essa pool passa aqui mais counter para cada membro , counter reinicia a cada PERIODO DO HEALTHMON
+//					 * mais tarde (NOUTRA FUNC? com periodo = timeout??) se counter != (num de monitors x num de membros) 
+//					 * ver qual e o counter de membro errado que deve ser = num de monitors da pool
+//					 * se nao for entao status = INACTIVE = -1					 	
+//					 */ 
+//				}
+
 				if (vipIpToId.containsKey(destIpAddress)){
 					IPClient client = new IPClient();
 					client.ipAddress = ip_pkt.getSourceAddress();
@@ -226,16 +254,18 @@ ILoadBalancerService, IOFMessageListener {
 						client.targetPort = TransportPort.of(0); 
 					}
 
-				//	if()
-
 					LBVip vip = vips.get(vipIpToId.get(destIpAddress));
 					if (vip == null)			// fix dereference violations           
 						return Command.CONTINUE;
 					LBPool pool = pools.get(vip.pickPool(client));
 					if (pool == null)			// fix dereference violations
 						return Command.CONTINUE;
-					LBMember member = members.get(pool.pickMember(client));
-					log.info("PICKING MEMBER!!!");
+
+					HashMap<String, Short> memberStatus = new HashMap<String, Short>();
+					for(LBMember member: members.values()){
+						memberStatus.put(member.id, member.status);	
+					}
+					LBMember member = members.get(pool.pickMember(client,memberStatus));
 					if(member == null)			//fix dereference violations
 						return Command.CONTINUE;
 
@@ -252,6 +282,43 @@ ILoadBalancerService, IOFMessageListener {
 		}
 		// bypass non-load-balanced traffic for normal processing (forwarding)
 		return Command.CONTINUE;
+	}
+
+	/**
+	 * used to collect statistics from members switch port
+	 * @return HashMap<String, U64> portBandwidth <memberId,bitsPerSecond RX> of port connected to member
+	 */
+	public HashMap<String, U64> collectSwitchPortBandwidth(){
+		HashMap<String,U64> memberPortBandwidth = new HashMap<String, U64>();
+		HashMap<IDevice, String> deviceToMemberId = new HashMap<IDevice, String>();
+
+		// retrieve all known devices to know which ones are attached to the members
+		Collection<? extends IDevice> allDevices = deviceManagerService.getAllDevices();
+
+		for (IDevice d : allDevices) {
+			for (int j = 0; j < d.getIPv4Addresses().length; j++) {
+				if(members != null){
+					for(LBMember member: members.values()){
+						if (member.address == d.getIPv4Addresses()[j].getInt())
+							deviceToMemberId.put(d, member.id);
+					}
+				}
+			}
+		}
+		// collect statistics of the switch ports attached to the members
+		if(deviceToMemberId !=null){
+			for(IDevice membersDevice: deviceToMemberId.keySet()){
+				String memberId = deviceToMemberId.get(membersDevice);
+				for(SwitchPort dstDap: membersDevice.getAttachmentPoints()){					
+					SwitchPortBandwidth bandwidthOfPort = statisticsService.getBandwidthConsumption(dstDap.getNodeId(), dstDap.getPortId());
+					if(bandwidthOfPort != null) // needs time for 1st collection, this avoids nullPointerException 
+						memberPortBandwidth.put(memberId, bandwidthOfPort.getBitsPerSecondRx());
+					memberIdToSwitchPort.put(memberId, dstDap); // NEEDS PINGALL TO SHOW CHANGES !!
+				}
+			}
+		}
+		log.info("MEMBER TO SWITCHPort: " + memberIdToSwitchPort); // !!
+		return memberPortBandwidth;
 	}
 
 	/**
@@ -608,128 +675,93 @@ ILoadBalancerService, IOFMessageListener {
 	}
 
 	// periodical function for health monitors
-	public void healthMonitorsCheck(){
+	// MEMBERSWITCHPORT LISTA DE TODOS OS MEMBROS E OS SP QUE ALGUMA VEZ ESTIVERAM ACTIVOS, PORTDESC = TODOS OS PORTS
+	private class healthMonitorsCheck implements Runnable {
+		// TODO
+		@Override
+		public void run() {
+			Map<NodePortTuple, PortDesc> portDesc = new HashMap<NodePortTuple, PortDesc>();
+			if(statisticsService != null){
+				statisticsService.collectStatistics(true);
+				collectSwitchPortBandwidth();
+				portDesc = statisticsService.getPortDesc();
 
-		ScheduledExecutorService scheduler = threadService.getScheduledExecutor();
-
-		final Runnable healthCheck = new Runnable() {
-			public void run() { 
 				if(vips != null && monitors != null && members != null && pools != null){
 					for(LBMonitor monitor: monitors.values()){
 						if(monitor.poolId != null && pools.get(monitor.poolId) != null){ 
-							LBPool pool = pools.get(monitor.poolId); // Se calhar so importa se a pool tem UM monitor e se sim, qual o seu type!
-							if(pool.vipId != null && vips.containsKey(pool.vipId)){
-								String vipId = pool.vipId;
-								for(String memberId: pool.members){
-									LBMember member = members.get(memberId);
-									if(member.macString !=null)	 // Only start the health monitoring after member has been used by a client							
-										vipProxyMembersHealthCheck(member.macString,IPv4Address.of(member.address),monitor.type,vipId);
+							LBPool pool = pools.get(monitor.poolId);
+							if(pool.vipId != null && vips.containsKey(pool.vipId) && !memberIdToSwitchPort.isEmpty()){
+								for(NodePortTuple allNpts: portDesc.keySet()){
+									for(String memberId: pool.members){
+										SwitchPort sp = memberIdToSwitchPort.get(memberId);		
+										if(sp !=null){
+											NodePortTuple memberNpt = new NodePortTuple(sp.getNodeId(),sp.getPortId());
+											if(portDesc.get(allNpts).isUp()){
+												if(memberNpt.equals(allNpts)){
+													members.get(memberId).status = 1;
+												}
+											} else {
+												if(memberNpt.equals(allNpts)){
+													members.get(memberId).status = -1;
+													log.warn("Member " + memberId + " has been determined inactive by the health monitor");
+												}
+											}
+										}
+									}
 								}
+
+								//			if(vips != null && monitors != null && members != null && pools != null){
+								//				for(LBMonitor monitor: monitors.values()){
+								//					if(monitor.poolId != null && pools.get(monitor.poolId) != null){ 
+								//						LBPool pool = pools.get(monitor.poolId); // Se calhar so importa se a pool tem UM monitor e se sim, qual o seu type!
+								//						if(pool.vipId != null && vips.containsKey(pool.vipId)){
+								//							for(String memberId: pool.members){
+								//								LBMember member = members.get(memberId);
+								//								if(member.macString !=null)	 // Only start the health monitoring after member has been used by a client							
+								//									vipProxyMembersHealthCheck(member.macString,IPv4Address.of(member.address),monitor.type,pool.vipId);
 							}
 						}
 					}
-				} 
+				}
 			}
-		};
-
-		scheduler.scheduleAtFixedRate(healthCheck, 10, 10,TimeUnit.SECONDS);
-	}
-
-	public void vipProxyMembersHealthCheck(String destMac, IPv4Address destAddr, byte msgType,String vipId){
-		LBVip vip = vips.get(vipId);
-
-		Set<DatapathId> datapaths = switchService.getAllSwitchDpids();
-		
-		log.info("vip addr: {}", IPv4Address.of(vip.address));
-		// check isempty()
-		DatapathId dpid = datapaths.iterator().next();
-		// check isnull
-		IOFSwitch theSW = switchService.getActiveSwitch(dpid);
-
-		if(msgType == IpProtocol.TCP.getIpProtocolNumber()){
-			IPacket tcpRequest = new Ethernet()
-
-					.setSourceMACAddress(vip.proxyMac)
-					.setDestinationMACAddress(MacAddress.of(destMac))
-					.setEtherType(EthType.IPv4)
-					.setPayload(
-							new IPv4()
-							.setSourceAddress(IPv4Address.of(vip.address))
-							.setDestinationAddress(destAddr)
-							.setTtl((byte) 64)
-							.setProtocol(IpProtocol.TCP)
-							.setPayload(
-									new TCP()
-									.setSourcePort(TransportPort.of(65003))
-									.setDestinationPort(TransportPort.of(58300))
-									));
-
-			
-			FloodlightContext cntx = null;
-			pushPacket(tcpRequest, theSW, OFBufferId.NO_BUFFER, OFPort.CONTROLLER, OFPort.ANY, cntx, true);
-			
-
-			log.info("AFTER TCP!!");
-//			Ethernet l2 = new Ethernet();
-			//			l2.setSourceMACAddress(vip.proxyMac);
-			//			l2.setDestinationMACAddress(MacAddress.BROADCAST);
-			//			l2.setEtherType(EthType.IPv4);
-			//
-			//			IPv4 l3 = new IPv4();
-			//			l3.setSourceAddress("192.168.1.1");
-			//			l3.setDestinationAddress("192.168.1.255");
-			//			l3.setTtl((byte) 64);
-			//			l3.setProtocol(IpProtocol.UDP);
-			//
-			//			UDP l4 = new UDP();
-			//			l4.setSourcePort(TransportPort.of(65003));
-			//			l4.setDestinationPort(TransportPort.of(67));
-			//
-			//			Data l7 = new Data();
-			//			l7.setData(new byte[1000]);
-			//
-			//			l2.setPayload(l3);
-			//			l3.setPayload(l4);
-			//			l4.setPayload(l7);
-			//
-			//			byte[] serializedData = l2.serialize();
-			//
-			//			OFPacketOut po = theSW.getOFFactory().buildPacketOut()
-			//					.setData(serializedData)
-			//					.setActions(Collections.singletonList((OFAction) theSW.getOFFactory().actions().output(OFPort.FLOOD, 0xffFFffFF)))
-			//					.setInPort(OFPort.CONTROLLER)
-			//					.build();
-			//
-			//			theSW.write(po);
 		}
-
-		if(msgType == IpProtocol.ICMP.getIpProtocolNumber()){
-			log.info("INSIDE ICMP!?!?!");
-			
-			
-			IPacket icmpRequest = new Ethernet()
-					.setSourceMACAddress(vip.proxyMac)
-					.setDestinationMACAddress(MacAddress.of(destMac))
-					.setEtherType(EthType.IPv4)
-					.setPayload(
-							new IPv4()
-							.setSourceAddress(IPv4Address.of(vip.address))
-							.setDestinationAddress(destAddr)
-							.setTtl((byte) 64)
-							.setProtocol(IpProtocol.ICMP)
-							.setPayload(
-									new ICMP()
-									.setIcmpType((byte) 8)
-									.setIcmpCode((byte) 0)
-									.setChecksum((short) 11)
-									));
-
-			
-			FloodlightContext cntx = null;
-			pushPacket(icmpRequest, theSW, OFBufferId.NO_BUFFER, OFPort.CONTROLLER, OFPort.ANY, cntx, true);
-		}
-
 	}
+	//	private void vipProxyMembersHealthCheck(String destMac, IPv4Address destAddr, byte msgType,String vipId){
+	//		Set<DatapathId> datapaths = switchService.getAllSwitchDpids();
+	//
+	//		DatapathId dpid = datapaths.iterator().next(); // +-!!!
+	//
+	//		IOFSwitch theSW = switchService.getActiveSwitch(dpid); // +-!!!
+	//		//log.info("SWI?" + theSW.getId());
+	//
+	//		if(msgType == IpProtocol.ICMP.getIpProtocolNumber()){
+	//			IPacket icmpRequest = new Ethernet()
+	//					.setSourceMACAddress(vips.get(vipId).proxyMac)
+	//					.setDestinationMACAddress(MacAddress.of(destMac))
+	//					.setEtherType(EthType.IPv4)
+	//					.setVlanID((short) 0)
+	//					.setPriorityCode((byte) 0)
+	//					.setPayload(
+	//							new IPv4()
+	//							.setSourceAddress(IPv4Address.of(vips.get(vipId).address))
+	//							.setDestinationAddress(destAddr)
+	//							.setProtocol(IpProtocol.ICMP)
+	//							.setTtl((byte) 64)
+	//							.setPayload(new ICMP()
+	//									.setIcmpType((byte) 8)
+	//									.setIcmpCode((byte) 0)
+	//									.setIdentifier((short) 0)
+	//									.setSequence((short) 0)
+	//									));
+	//
+	//			FloodlightContext cntx = null;
+	//			pushPacket(icmpRequest, theSW, OFBufferId.NO_BUFFER, OFPort.CONTROLLER, OFPort.FLOOD, cntx, true);
+	//		}
+	//	}
+
+	/*
+	 * ILoadBalancerService functions
+	 */
 
 	@Override
 	public Collection<LBVip> listVips() {
@@ -926,18 +958,28 @@ ILoadBalancerService, IOFMessageListener {
 		if (monitor == null)
 			monitor = new LBMonitor();
 
+		for(LBMonitor allMonitors: monitors.values()){
+			if(monitor.poolId.equals(allMonitors.poolId)){
+				log.error("Pool already has monitor associated with");
+				return null;
+			}
+		}
 		monitors.put(monitor.id, monitor);
 		monitorIpToId.put(monitor.address, monitor.id);
-
 		return monitor;
 	}
 
 	@Override
 	public LBMonitor updateMonitor(LBMonitor monitor) {
+		for(LBMonitor allMonitors: monitors.values()){
+			if(monitor.poolId.equals(allMonitors.poolId)){
+				log.error("Pool already has monitor associated with");
+				return null;
+			}
+		}
 		monitors.put(monitor.id, monitor);
 		return monitor;
 	}
-
 
 	@Override
 	public Collection<LBMonitor> associateMonitorWithPool(String poolId,LBMonitor monitor) {
@@ -948,6 +990,13 @@ ILoadBalancerService, IOFMessageListener {
 			monitor = new LBMonitor();
 		}
 
+		for(LBMonitor allMonitors: monitors.values()){
+			if(poolId.equals(allMonitors.poolId)){
+				log.error("Pool already has monitor associated with");
+				return null;
+			}
+		}
+
 		monitors.put(monitor.id, monitor);
 		monitorIpToId.put(monitor.address, monitor.id);
 
@@ -956,13 +1005,12 @@ ILoadBalancerService, IOFMessageListener {
 
 		if(pool !=null){
 			pool.monitors.add(monitor.id);
-			monitor.setPool(poolId);
+			monitor.poolId = poolId;
 
 			// in case monitor is associated a second time without dissociating first
-			ArrayList<String> monitorsInWrongPool = null;
+			ArrayList<String> monitorsInWrongPool = new ArrayList<String>();
 			for(String monitorId: pool.monitors){
 				if(!Objects.equals(monitors.get(monitorId).poolId, poolId)){
-					monitorsInWrongPool = new ArrayList<String>();
 					monitorsInWrongPool.add(monitorId); 	
 
 				} else{
@@ -988,7 +1036,7 @@ ILoadBalancerService, IOFMessageListener {
 
 		if(pool !=null && monitor !=null && pool.monitors.contains(monitorId)){
 			pool.monitors.remove(monitorId);
-			monitor.setPool(null);
+			monitor.poolId = null;
 			return 0;
 		}else{
 			return -1;
@@ -1010,6 +1058,26 @@ ILoadBalancerService, IOFMessageListener {
 			return -1;
 		}    
 	}
+
+	@Override
+	public void healthMonitoring(boolean monitor) {
+		if(monitor && !isMonitoringEnabled){
+			healthMonitoring = threadService.getScheduledExecutor().scheduleAtFixedRate(new healthMonitorsCheck(), 15, 15, TimeUnit.SECONDS); // !!
+			isMonitoringEnabled = true;
+			log.warn("Health monitoring thread started");
+		} else if(!monitor && isMonitoringEnabled){
+			if (!healthMonitoring.cancel(false)) {
+				log.error("Could not cancel health monitoring thread");
+			} else {
+				log.warn("Health monitoring thread stopped");
+			}
+			isMonitoringEnabled = false;
+		}
+	}
+	
+	/*
+	 * IFloodlightModule implementation
+	 */
 
 	@Override
 	public Collection<Class<? extends IFloodlightService>>
@@ -1060,6 +1128,7 @@ ILoadBalancerService, IOFMessageListener {
 		sfpService = context.getServiceImpl(IStaticEntryPusherService.class);
 		switchService = context.getServiceImpl(IOFSwitchService.class);
 		threadService = context.getServiceImpl(IThreadPoolService.class);
+		statisticsService = context.getServiceImpl(IStatisticsService.class);
 
 		vips = new HashMap<String, LBVip>();
 		pools = new HashMap<String, LBPool>();
@@ -1068,9 +1137,9 @@ ILoadBalancerService, IOFMessageListener {
 		vipIpToId = new HashMap<Integer, String>();
 		vipIpToMac = new HashMap<Integer, MacAddress>();
 		memberIpToId = new HashMap<Integer, String>();
-		monitorIpToId = new HashMap<Integer, String>() ;
+		monitorIpToId = new HashMap<Integer, String>();
+		memberIdToSwitchPort= new HashMap<String, SwitchPort>();
 
-		healthMonitorsCheck();
 	}
 
 	@Override
